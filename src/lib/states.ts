@@ -5,7 +5,7 @@ export const SUBSCRIPTION_STATES = ["incomplete", "active", "past_due", "suspend
 export type SubscriptionState = (typeof SUBSCRIPTION_STATES)[number];
 export const SUBSCRIPTION_TRANSITIONS: Transitions<SubscriptionState> = {
   incomplete: ["active", "canceled"],
-  active: ["past_due", "canceling", "canceled", "refunded"],
+  active: ["past_due", "suspended", "canceling", "canceled", "refunded"],
   past_due: ["active", "suspended", "canceled"],
   suspended: ["active", "canceled"],
   canceling: ["active", "canceled"],

@@ -6,3 +6,7 @@
 4. **SLA**: 99.99%는 HA 티어에서 이중화 + 자체 SLA 엔진으로 추구. 계약 SLA는 90일 실측 후 승격.
 5. **금액**: micro-USD 정수. 반올림은 청구 라인당 1회.
 6. **GitHub**: 코드 저장소로만 사용. Actions/자동 배포 없음.
+7. **인증**: PBKDF2-SHA256 100,000회(Workers WebCrypto 상한). 세션 토큰은 SHA-256 해시만 저장, `__Host-` 쿠키, CSRF 토큰(해시 저장)과 Origin 검사 병행. 로그인은 더미 해시로 사용자 존재 여부 노출 방지.
+8. **웹훅**: 서명 검증(5분 허용) → `webhook_events` 이벤트 ID 멱등 → 처리. `checkout.session.completed` 는 ID 연결만, 활성화·프로비저닝은 `invoice.paid` 에서만. 순서 역전은 500 후 Stripe 재시도로 해소.
+9. **아웃박스**: 큐 전송은 DB 작업 행(queued)을 기준으로 별도 전달(최소 1회). 소비자는 `idempotency_key` 로 멱등 처리.
+10. **속도 제한**: 현재 MemoryRateLimiter 는 isolate 단위. 운영 전 Durable Object 구현으로 교체 필요(알려진 제한).
