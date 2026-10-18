@@ -14,6 +14,14 @@ export interface Rates {
   cswIncludedRequests: number;
   cswIncludedCpuMs: number;
   casPer1kNeurons: { general: Micro; performance: Micro; premium: Micro };
+  sqliteExtraPerGB: Micro;
+  sqliteIncludedWrites: number;
+  sqliteIncludedReads: number;
+  sqliteWritesPerMillion: Micro;
+  sqliteReadsPerMillion: Micro;
+  pgExtraPerGB: Micro;
+  pgIncludedEgressMilliGB: number;
+  pgEgressPerGB: Micro;
 }
 
 export const SEED_RATES: Rates = {
@@ -28,6 +36,14 @@ export const SEED_RATES: Rates = {
   cswIncludedRequests: 1_000_000,
   cswIncludedCpuMs: 10_000_000,
   casPer1kNeurons: { general: usd("0.02"), performance: usd("0.03"), premium: usd("0.04") },
+  sqliteExtraPerGB: usd("1.50"),
+  sqliteIncludedWrites: 500_000,
+  sqliteIncludedReads: 50_000_000,
+  sqliteWritesPerMillion: usd("2.00"),
+  sqliteReadsPerMillion: usd("0.002"),
+  pgExtraPerGB: usd("0.25"),
+  pgIncludedEgressMilliGB: 250_000,
+  pgEgressPerGB: usd("0.18"),
 };
 
 export interface InvoiceLine { description: string; amountMicro: Micro }
@@ -117,5 +133,29 @@ export function wordpressMonthly(p: Product, usedStorageMilliGB: number, r: Rate
   const lines: InvoiceLine[] = [{ description: p.nameKo, amountMicro: p.monthlyMicro }];
   const extra = Math.max(0, usedStorageMilliGB - (p.includedStorageGB ?? 0) * 1000);
   if (extra > 0) lines.push({ description: `포함 용량 초과 ${extra / 1000} GB`, amountMicro: mulMilli(r.cloudageExtraPerGB, extra) });
+  return lines;
+}
+
+/** ClouDB SQLite(D1 기반). 포함 용량·쓰기·읽기 초과분만 청구. */
+export function sqliteMonthly(p: Product, u: { storageMilliGB: number; rowsWritten: number; rowsRead: number }, r: Rates = SEED_RATES): InvoiceLine[] {
+  if (p.kind !== "cloudb_sqlite") throw new Error("not a sqlite product");
+  const lines: InvoiceLine[] = [{ description: p.nameKo, amountMicro: p.monthlyMicro }];
+  const extra = Math.max(0, u.storageMilliGB - (p.includedStorageGB ?? 0) * 1000);
+  if (extra > 0) lines.push({ description: `추가 저장 공간 ${extra / 1000} GB`, amountMicro: mulMilli(r.sqliteExtraPerGB, extra) });
+  const ow = Math.max(0, u.rowsWritten - r.sqliteIncludedWrites);
+  if (ow > 0) lines.push({ description: "초과 쓰기 행", amountMicro: Math.round((ow * r.sqliteWritesPerMillion) / 1_000_000) });
+  const or = Math.max(0, u.rowsRead - r.sqliteIncludedReads);
+  if (or > 0) lines.push({ description: "초과 읽기 행", amountMicro: Math.round((or * r.sqliteReadsPerMillion) / 1_000_000) });
+  return lines;
+}
+
+/** ClouDB PostgreSQL. 제공자와 무관하게 고객 가격은 동일(제공자 선택은 내부 원가 최적화). */
+export function postgresMonthly(p: Product, u: { storageMilliGB: number; egressMilliGB: number }, r: Rates = SEED_RATES): InvoiceLine[] {
+  if (p.kind !== "cloudb_pg") throw new Error("not a postgres product");
+  const lines: InvoiceLine[] = [{ description: p.nameKo, amountMicro: p.monthlyMicro }];
+  const extra = Math.max(0, u.storageMilliGB - (p.includedStorageGB ?? 0) * 1000);
+  if (extra > 0) lines.push({ description: `추가 저장 공간 ${extra / 1000} GB`, amountMicro: mulMilli(r.pgExtraPerGB, extra) });
+  const eg = Math.max(0, u.egressMilliGB - r.pgIncludedEgressMilliGB);
+  if (eg > 0) lines.push({ description: "초과 송신", amountMicro: mulMilli(r.pgEgressPerGB, eg) });
   return lines;
 }

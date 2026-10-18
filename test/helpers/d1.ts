@@ -4,7 +4,8 @@ import type { DatabaseSync as DB } from "node:sqlite";
 import type { D1Like, D1Stmt } from "../../src/lib/db";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (p: string) => DB };
-const schema = readFileSync(new URL("../../migrations/0001_init.sql", import.meta.url), "utf8");
+export const MIGRATIONS = ["0001_init.sql", "0002_engines_rail_optimizer.sql"];
+export const readMigration = (f: string) => readFileSync(new URL(`../../migrations/${f}`, import.meta.url), "utf8");
 
 class Stmt implements D1Stmt {
   constructor(private db: DB, private sql: string, private params: unknown[] = []) {}
@@ -17,8 +18,8 @@ class Stmt implements D1Stmt {
 /** 테스트용 D1 호환 어댑터(SQLite). batch 는 트랜잭션으로 원자성을 보장한다. */
 export function makeDb(): { db: D1Like; raw: DB } {
   const raw = new DatabaseSync(":memory:");
-  raw.exec(schema);
   raw.exec("PRAGMA foreign_keys = ON");
+  for (const f of MIGRATIONS) { raw.exec("BEGIN"); raw.exec(readMigration(f)); raw.exec("COMMIT"); } // D1 도 마이그레이션을 트랜잭션으로 적용
   const db: D1Like = {
     prepare: (sql) => new Stmt(raw, sql),
     async batch(stmts) {
