@@ -53,4 +53,19 @@ describe("마이그레이션 0002 (데이터 보존 + 새 제약)", () => {
     expect(reco("r2")).toThrow();
     expect(reco("r3", "dismissed")).not.toThrow();
   });
+  it("0003: 약정 기본 10GB, 대여 제약, 일별 사용량 연쇄 삭제", () => {
+    const { raw } = makeDb();
+    raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u','a@b.co','h')");
+    raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('p','cloudage','x')");
+    raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr','p',1,1)");
+    raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id) VALUES('s1','u','p','pr'),('s2','u','p','pr')");
+    raw.exec("INSERT INTO storage_buckets(id,subscription_id,customer_id,r2_bucket_name) VALUES('b1','s1','u','n1'),('b2','s2','u','n2')");
+    expect(raw.prepare("select entitlement_bytes e, policy_json p from storage_buckets where id='b1'").get()).toMatchObject({ e: 10_000_000_000, p: "{}" });
+    expect(() => raw.exec("INSERT INTO storage_loans(id,lender_bucket_id,borrower_bucket_id,bytes,scope) VALUES('l1','b1','b1',1,'customer')")).toThrow();
+    expect(() => raw.exec("INSERT INTO storage_loans(id,lender_bucket_id,borrower_bucket_id,bytes,scope) VALUES('l1','b1','b2',0,'customer')")).toThrow();
+    expect(() => raw.exec("INSERT INTO storage_loans(id,lender_bucket_id,borrower_bucket_id,bytes,scope) VALUES('l1','b1','b2',256,'galaxy')")).toThrow();
+    expect(() => raw.exec("INSERT INTO storage_loans(id,lender_bucket_id,borrower_bucket_id,bytes,scope) VALUES('l1','b1','b2',256,'customer')")).not.toThrow();
+    raw.exec("INSERT INTO storage_usage_daily(bucket_id,day,logical_peak_bytes,logical_end_bytes,physical_end_bytes) VALUES('b1','2026-10-18',5,5,3)");
+    expect(() => raw.exec("DELETE FROM storage_buckets WHERE id='b1'")).toThrow(); // 대여 원장이 참조 중이면 삭제 불가
+  });
 });

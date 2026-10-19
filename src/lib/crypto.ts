@@ -73,3 +73,8 @@ export async function decryptSecret(token: string, keyB64: string, aad = ""): Pr
   const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64urlDecode(iv), additionalData: enc.encode(aad) }, await aesKey(keyB64), b64urlDecode(ct));
   return new TextDecoder().decode(pt);
 }
+
+export async function sha256HexBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
