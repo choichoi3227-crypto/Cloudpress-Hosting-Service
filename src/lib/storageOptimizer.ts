@@ -117,3 +117,43 @@ export function planTiering(o: { sizeBytes: number; daysSinceLastAccess: number;
   const payback = monthlySaving > 0 ? moveCost / monthlySaving : Infinity;
   return payback <= 6 ? { move: true, reason: "회수 기간 6개월 이내", paybackMonths: payback } : { move: false, reason: "객체가 작아 전환 비용 회수 불가", paybackMonths: payback };
 }
+
+/* ── Cloudflare Images 변환(운영자 결정): 무료 5,000건/월은 계정 공용, 초과 $0.50/1,000건(고유 변환 기준) ── */
+export const TRANSFORM_FREE_PER_MONTH = 5000;
+export const TRANSFORM_COST_MICRO = 500; // $0.0005
+
+/** 이미지를 변환본으로 교체해 저장 용량을 줄일 때의 비용 회수 기간(개월). 변환 비용 ÷ 월 절감액. */
+export function imageRewritePaybackMonths(sizeBytes: number, savedRatio: number, o: { transformCostMicro?: Micro; storagePerGBMonth?: Micro } = {}): number {
+  const monthlySaving = ((sizeBytes * savedRatio) / BYTES_PER_GB) * (o.storagePerGBMonth ?? 15_000);
+  return monthlySaving > 0 ? (o.transformCostMicro ?? TRANSFORM_COST_MICRO) / monthlySaving : Infinity;
+}
+
+/**
+ * 손실 이미지 교체 결정. 저장 비용 절감이 목적이면:
+ * - 계정이 무료 저장 제공량 이내면 절감 이득이 0 → 하지 않는다(되돌릴 수 없는 손실 변환을 할 이유가 없음).
+ * - 무료 변환 예산이 남아 있으면 비용 0 으로 허용, 없으면 회수 기간이 maxPaybackMonths 이내일 때만.
+ */
+export function decideImageRewrite(i: { sizeBytes: number; expectedSavedRatio: number; freeTransformsLeft: number; accountPhysicalBytes: number; freeTierBytes?: number; maxPaybackMonths?: number }): { rewrite: boolean; reason: string; paybackMonths?: number } {
+  if (i.accountPhysicalBytes <= (i.freeTierBytes ?? 10 * BYTES_PER_GB)) return { rewrite: false, reason: "무료 저장 제공량 이내: 절감 이득 없음" };
+  if (i.freeTransformsLeft > 0) return { rewrite: true, reason: "무료 변환 예산 사용(추가 비용 없음)" };
+  const months = imageRewritePaybackMonths(i.sizeBytes, i.expectedSavedRatio);
+  return months <= (i.maxPaybackMonths ?? 12) ? { rewrite: true, reason: "회수 기간 내", paybackMonths: months } : { rewrite: false, reason: "유료 변환 비용을 회수하지 못함", paybackMonths: months };
+}
+
+/**
+ * 계정 공용 무료 변환 예산을 버킷별로 공정 배분(수요 이내에서 균등 분배, 버킷당 상한).
+ * 남는 몫은 수요가 큰 버킷으로 재분배한다(물 채우기 방식). 합계는 예산을 넘지 않는다.
+ */
+export function allocateTransformBudget(reqs: { bucketId: string; requested: number }[], freeRemaining: number, perBucketCap: number): { bucketId: string; granted: number }[] {
+  const want = new Map(reqs.map((r) => [r.bucketId, Math.max(0, Math.min(r.requested, perBucketCap))]));
+  const got = new Map(reqs.map((r) => [r.bucketId, 0]));
+  let left = Math.max(0, freeRemaining);
+  let active = [...want.keys()].filter((k) => want.get(k)! > 0).sort();
+  while (left > 0 && active.length > 0) {
+    const share = Math.floor(left / active.length);
+    if (share === 0) { for (const k of active) { if (left === 0) break; got.set(k, got.get(k)! + 1); left--; } break; }
+    for (const k of active) { const give = Math.min(share, want.get(k)! - got.get(k)!); got.set(k, got.get(k)! + give); left -= give; }
+    active = active.filter((k) => got.get(k)! < want.get(k)!);
+  }
+  return reqs.map((r) => ({ bucketId: r.bucketId, granted: got.get(r.bucketId)! }));
+}

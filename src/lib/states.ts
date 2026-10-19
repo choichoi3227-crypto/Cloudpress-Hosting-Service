@@ -38,3 +38,18 @@ export const PAYOUT_TRANSITIONS: Transitions<PayoutState> = {
 export function assertTransition<S extends string>(table: Transitions<S>, from: S, to: S): void {
   if (!table[from]?.includes(to)) throw new Error(`illegal state transition: ${from} -> ${to}`);
 }
+
+export const DOMAIN_ORDER_STATES = ["awaiting_payment", "paid", "registering", "registered", "failed", "needs_review", "refund_due", "refunded", "quote_expired"] as const;
+export type DomainOrderState = (typeof DOMAIN_ORDER_STATES)[number];
+/** 등록은 환불 불가이므로 registering 이후 모호한 상태는 자동 재시도 대신 needs_review 로 보낸다. */
+export const DOMAIN_ORDER_TRANSITIONS: Transitions<DomainOrderState> = {
+  awaiting_payment: ["paid", "quote_expired"],
+  quote_expired: ["paid"], // 만료 후 결제가 도착해도 원가 변동 검사 후 처리
+  paid: ["registering", "refund_due"],
+  registering: ["registered", "needs_review", "refund_due"],
+  needs_review: ["registered", "refund_due"], // 운영자 판단
+  refund_due: ["refunded"],
+  registered: [],
+  refunded: [],
+  failed: [],
+};
