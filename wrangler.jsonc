@@ -10,7 +10,7 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": { "APP_ORIGIN": "http://localhost:4321", "CLOUDPRESS_MODE": "mock" },
+  "vars": { "APP_ORIGIN": "http://localhost:4321", "CLOUDPRESS_MODE": "live" },
   "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-dev", "migrations_dir": "migrations" }],
   "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-dev" }], "consumers": [{ "queue": "cloudpress-jobs-dev", "max_batch_size": 10, "max_batch_timeout": 5 }] },
   "triggers": { "crons": ["*/5 * * * *"] },
