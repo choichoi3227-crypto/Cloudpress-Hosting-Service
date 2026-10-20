@@ -27,7 +27,7 @@ CREATE INDEX idx_domain_orders_customer ON domain_orders(customer_id, status);
 CREATE TABLE dns_zones (
   id TEXT PRIMARY KEY,
   customer_id TEXT NOT NULL REFERENCES users(id),
-  hostname TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  hostname TEXT NOT NULL COLLATE NOCASE,
   cf_zone_id TEXT NOT NULL UNIQUE,
   origin TEXT NOT NULL CHECK (origin IN ('registered','connected')),
   status TEXT NOT NULL DEFAULT 'pending_nameservers' CHECK (status IN ('pending_nameservers','active','moved','suspended','deleted')),
@@ -39,6 +39,8 @@ CREATE TABLE dns_zones (
   last_checked_at TEXT
 );
 CREATE INDEX idx_dns_zones_customer ON dns_zones(customer_id, status);
+-- 삭제된 영역(만료 정리·선점 제거)이 있어도 같은 도메인을 다시 연결할 수 있도록, 유일성은 삭제되지 않은 행에만 적용한다.
+CREATE UNIQUE INDEX uq_dns_zones_active_hostname ON dns_zones(hostname) WHERE status <> 'deleted';
 
 CREATE TABLE dns_records (
   id TEXT PRIMARY KEY,

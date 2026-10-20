@@ -1,7 +1,10 @@
 import { CfClient, CfApiError } from "./cfApi";
 import { usd, type Micro } from "./money";
 
-export interface DomainCheck { name: string; registrable: boolean; reason?: string; tier?: string; registrationCostMicro?: Micro; renewalCostMicro?: Micro }
+export interface DomainCheck { name: string; registrable: boolean; reason?: string; tier?: string; registrationCostMicro?: Micro; renewalCostMicro?: Micro; /** 원화로 공급가를 주는 등록기관(가비아)용 */ registrationCostWon?: number; renewalCostWon?: number }
+
+/** 등록기관의 네임서버 변경(타사 네임서버 위임). */
+export interface NameserverPort { setNameservers(domainName: string, nameservers: string[]): Promise<void> }
 export interface RegistrantContact { email: string; phone: string; postal_info: { name: string; organization?: string; address: { street: string; city: string; state: string; postal_code: string; country_code: string } } }
 
 export type RegistrationOutcome =
