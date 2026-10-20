@@ -1,8 +1,9 @@
 import { type D1Like, newId, nowIso } from "./db";
 import { verifyStripeSignature, type StripeEvent } from "./stripe";
 import { assertTransition, SUBSCRIPTION_TRANSITIONS, type SubscriptionState } from "./states";
+import { parseCurrency, minorToMicro, latestFxRate } from "./currency";
+import { markPaid } from "./domainOrders";
 
-const CENT_TO_MICRO = 10_000;
 type Sub = { id: string; customer_id: string; status: SubscriptionState; stripe_subscription_id: string | null };
 
 export interface WebhookResponse { status: number; body: string }
@@ -36,7 +37,7 @@ export async function handleStripeWebhook(db: D1Like, rawBody: string, sigHeader
 
 async function dispatch(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
   switch (ev.type) {
-    case "checkout.session.completed": return onCheckoutCompleted(db, ev, nowMs);
+    case "checkout.session.completed": case "checkout.session.async_payment_succeeded": return onCheckoutCompleted(db, ev, nowMs);
     case "invoice.paid": return onInvoicePaid(db, ev, nowMs);
     case "invoice.payment_failed": return onPaymentFailed(db, ev, nowMs);
     case "customer.subscription.updated": return onSubscriptionUpdated(db, ev, nowMs);
@@ -55,9 +56,14 @@ function jobStmt(db: D1Like, kind: string, subId: string, idemKey: string, nowMs
     .bind(newId("job"), kind, subId, idemKey, nowIso(nowMs), nowIso(nowMs));
 }
 
-/** 결제 확정은 하지 않는다. 우리 구독 행과 Stripe 구독 ID 만 연결한다(활성화는 invoice.paid 에서). */
+/**
+ * 구독 결제(mode=subscription): 우리 구독 행과 Stripe 구독 ID 만 연결한다(활성화는 invoice.paid 에서).
+ * 도메인 결제(mode=payment, metadata.domain_order_id): 결제 완료(payment_status=paid)일 때만 주문을 '결제됨'으로 바꾸고 등록 작업을 만든다.
+ */
 async function onCheckoutCompleted(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
   const s = ev.data.object;
+  const orderId: string | undefined = s.metadata?.domain_order_id;
+  if (s.mode === "payment" && orderId) return onDomainPayment(db, s, orderId, nowMs);
   const ourId: string | undefined = s.metadata?.cloudpress_subscription_id;
   if (s.mode !== "subscription" || !ourId || !s.subscription) return false;
   const r = await db.prepare("UPDATE subscriptions SET stripe_subscription_id = ?, stripe_customer_id = COALESCE(stripe_customer_id, ?), updated_at = ? WHERE id = ? AND (stripe_subscription_id IS NULL OR stripe_subscription_id = ?)")
@@ -66,18 +72,40 @@ async function onCheckoutCompleted(db: D1Like, ev: StripeEvent, nowMs: number): 
   return true;
 }
 
+async function onDomainPayment(db: D1Like, s: Record<string, any>, orderId: string, nowMs: number): Promise<boolean> {
+  if (s.payment_status !== "paid") return false; // 지연 결제수단: async_payment_succeeded 에서 처리
+  const o = await db.prepare("SELECT id,customer_id,charge_currency,charge_amount,fx_rate_micro,price_micro FROM domain_orders WHERE id = ?").bind(orderId).first<{ id: string; customer_id: string; charge_currency: "USD" | "KRW"; charge_amount: number | null; fx_rate_micro: number | null; price_micro: number }>();
+  if (!o) throw new Error(`domain order not found: ${orderId}`);
+  const cur = parseCurrency(s.currency);
+  const minor = Number(s.amount_total ?? 0);
+  // 청구 통화·금액이 견적과 다르면 등록하지 않는다(변조·설정 오류 방지). 운영자가 확인할 수 있게 오류로 남긴다.
+  if (cur !== o.charge_currency || (o.charge_amount !== null && minor !== o.charge_amount)) throw new Error(`domain payment mismatch for ${orderId}: ${cur} ${minor} != ${o.charge_currency} ${o.charge_amount}`);
+  const pi: string = s.payment_intent;
+  if (!pi) throw new Error("payment_intent missing");
+  const result = await markPaid(db, orderId, pi, nowMs);
+  await db.batch([
+    db.prepare("INSERT OR IGNORE INTO payments(id,customer_id,stripe_payment_intent_id,amount_micro,status,paid_at,created_at,currency,amount_minor,fx_rate_micro) VALUES(?,?,?,?,?,?,?,?,?,?)")
+      .bind(`pay_${pi}`, o.customer_id, pi, o.price_micro, "succeeded", nowIso(nowMs), nowIso(nowMs), cur, minor, cur === "KRW" ? o.fx_rate_micro : null),
+    ...(result === "paid" ? [db.prepare("INSERT OR IGNORE INTO deployment_jobs(id,kind,idempotency_key,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)").bind(newId("job"), "register_domain", `register:${orderId}`, JSON.stringify({ orderId }), nowIso(nowMs), nowIso(nowMs))] : []),
+  ]);
+  return true;
+}
+
 async function onInvoicePaid(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
   const inv = ev.data.object;
   const sub = await findSubByStripe(db, inv.subscription);
   if (!sub) throw new Error(`subscription not linked yet: ${inv.subscription}`); // 순서 역전 → 재시도
-  const amountMicro = Number(inv.amount_paid ?? 0) * CENT_TO_MICRO;
+  const cur = parseCurrency(inv.currency);
+  const minor = Number(inv.amount_paid ?? 0);
+  const fx = cur === "KRW" ? await latestFxRate(db) : null; // 환율이 없으면 오류 → Stripe 재시도(금액을 추정해 기록하지 않음)
+  const amountMicro = minorToMicro(cur, minor, fx);
   const period = inv.lines?.data?.[0]?.period;
   const invoiceId = `inv_${inv.id}`;
   const stmts = [
-    db.prepare("INSERT OR IGNORE INTO invoices(id,subscription_id,customer_id,stripe_invoice_id,status,subtotal_micro,total_micro,period_start,period_end,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
-      .bind(invoiceId, sub.id, sub.customer_id, inv.id, "paid", amountMicro, amountMicro, period ? nowIso(period.start * 1000) : null, period ? nowIso(period.end * 1000) : null, nowIso(nowMs)),
-    db.prepare("INSERT OR IGNORE INTO payments(id,invoice_id,customer_id,stripe_payment_intent_id,stripe_charge_id,amount_micro,status,paid_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)")
-      .bind(`pay_${inv.id}`, invoiceId, sub.customer_id, inv.payment_intent ?? null, inv.charge ?? null, amountMicro, "succeeded", nowIso(nowMs), nowIso(nowMs)),
+    db.prepare("INSERT OR IGNORE INTO invoices(id,subscription_id,customer_id,stripe_invoice_id,status,subtotal_micro,total_micro,currency,total_minor,period_start,period_end,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(invoiceId, sub.id, sub.customer_id, inv.id, "paid", amountMicro, amountMicro, cur, minor, period ? nowIso(period.start * 1000) : null, period ? nowIso(period.end * 1000) : null, nowIso(nowMs)),
+    db.prepare("INSERT OR IGNORE INTO payments(id,invoice_id,customer_id,stripe_payment_intent_id,stripe_charge_id,amount_micro,status,paid_at,created_at,currency,amount_minor,fx_rate_micro) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(`pay_${inv.id}`, invoiceId, sub.customer_id, inv.payment_intent ?? null, inv.charge ?? null, amountMicro, "succeeded", nowIso(nowMs), nowIso(nowMs), cur, minor, fx),
   ];
   if (sub.status !== "active" && sub.status !== "canceling") {
     assertTransition(SUBSCRIPTION_TRANSITIONS, sub.status, "active");
@@ -137,9 +165,9 @@ async function onSubscriptionDeleted(db: D1Like, ev: StripeEvent, nowMs: number)
   return true;
 }
 
-type Pay = { id: string; customer_id: string; amount_micro: number; invoice_id: string | null };
+type Pay = { id: string; customer_id: string; amount_micro: number; invoice_id: string | null; currency: "USD" | "KRW"; amount_minor: number | null; fx_rate_micro: number | null };
 const findPayment = (db: D1Like, charge: string | null | undefined, pi: string | null | undefined) =>
-  db.prepare("SELECT id,customer_id,amount_micro,invoice_id FROM payments WHERE (stripe_charge_id IS NOT NULL AND stripe_charge_id = ?) OR (stripe_payment_intent_id IS NOT NULL AND stripe_payment_intent_id = ?)")
+  db.prepare("SELECT id,customer_id,amount_micro,invoice_id,currency,amount_minor,fx_rate_micro FROM payments WHERE (stripe_charge_id IS NOT NULL AND stripe_charge_id = ?) OR (stripe_payment_intent_id IS NOT NULL AND stripe_payment_intent_id = ?)")
     .bind(charge ?? null, pi ?? null).first<Pay>();
 
 async function subOfPayment(db: D1Like, p: Pay) {
@@ -150,13 +178,15 @@ async function onChargeRefunded(db: D1Like, ev: StripeEvent, nowMs: number): Pro
   const c = ev.data.object;
   const pay = await findPayment(db, c.id, c.payment_intent);
   if (!pay) throw new Error(`payment not found for charge ${c.id}`);
-  const totalRefundedMicro = Number(c.amount_refunded ?? 0) * CENT_TO_MICRO;
-  const full = totalRefundedMicro >= pay.amount_micro;
+  const toMicro = (minor: number) => minorToMicro(pay.currency, minor, pay.fx_rate_micro); // 결제 때의 환율로 환산(환불 시점 환율 변동 영향 없음)
+  const totalRefundedMinor = Number(c.amount_refunded ?? 0);
+  const totalRefundedMicro = toMicro(totalRefundedMinor);
+  const full = pay.amount_minor !== null ? totalRefundedMinor >= pay.amount_minor : totalRefundedMicro >= pay.amount_micro;
   const stmts = [];
   const list: Array<{ id: string; amount: number; reason?: string }> = c.refunds?.data ?? [];
   if (list.length > 0) {
     for (const r of list) stmts.push(db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,stripe_refund_id,amount_micro,reason,kind,created_at) VALUES(?,?,?,?,?,'refund',?)")
-      .bind(`ref_${r.id}`, pay.id, r.id, r.amount * CENT_TO_MICRO, r.reason ?? null, nowIso(nowMs)));
+      .bind(`ref_${r.id}`, pay.id, r.id, toMicro(r.amount), r.reason ?? null, nowIso(nowMs)));
   } else if (totalRefundedMicro > 0) {
     // 최신 API 는 refunds 목록을 기본 포함하지 않는다. 누적액 기준 합성 행을 남기고 대조 작업(reconcile)이 실제 환불 ID 로 보정한다.
     stmts.push(db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,amount_micro,kind,created_at) VALUES(?,?,?,'refund',?)").bind(`ref_total_${c.id}_${c.amount_refunded}`, pay.id, totalRefundedMicro, nowIso(nowMs)));
@@ -177,7 +207,7 @@ async function onDisputeCreated(db: D1Like, ev: StripeEvent, nowMs: number): Pro
   const pay = await findPayment(db, d.charge, d.payment_intent);
   if (!pay) throw new Error(`payment not found for dispute ${d.id}`);
   const stmts = [
-    db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,amount_micro,reason,kind,created_at) VALUES(?,?,?,?,'chargeback',?)").bind(`cb_${d.id}`, pay.id, Number(d.amount ?? 0) * CENT_TO_MICRO, d.reason ?? null, nowIso(nowMs)),
+    db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,amount_micro,reason,kind,created_at) VALUES(?,?,?,?,'chargeback',?)").bind(`cb_${d.id}`, pay.id, minorToMicro(pay.currency, Number(d.amount ?? 0), pay.fx_rate_micro), d.reason ?? null, nowIso(nowMs)),
     db.prepare("UPDATE payments SET status='disputed' WHERE id=?").bind(pay.id),
     db.prepare("INSERT INTO notifications(id,audience,severity,title,body,created_at) VALUES(?,?,?,?,?,?)").bind(newId("ntf"), "operator", "critical", "결제 분쟁 발생", `dispute ${d.id}`, nowIso(nowMs)),
   ];

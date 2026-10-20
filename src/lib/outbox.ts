@@ -8,9 +8,10 @@ import { type D1Like, type QueueLike, nowIso } from "./db";
 export async function dispatchOutbox(db: D1Like, queue: QueueLike<{ jobId: string }>, nowMs: number, limit = 50): Promise<number> {
   const { results } = await db.prepare(
     `SELECT j.id FROM deployment_jobs j
-      WHERE j.state = 'queued' AND NOT EXISTS (SELECT 1 FROM queue_jobs q WHERE q.deployment_job_id = j.id)
+      WHERE j.state IN ('queued','retrying') AND (j.next_run_at IS NULL OR j.next_run_at <= ?)
+       AND NOT EXISTS (SELECT 1 FROM queue_jobs q WHERE q.deployment_job_id = j.id)
       ORDER BY j.created_at LIMIT ?`,
-  ).bind(limit).all<{ id: string }>();
+  ).bind(nowIso(nowMs), limit).all<{ id: string }>();
   let sent = 0;
   for (const { id } of results) {
     try {

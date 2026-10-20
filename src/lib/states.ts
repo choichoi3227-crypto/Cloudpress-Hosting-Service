@@ -17,7 +17,7 @@ export const JOB_STATES = ["queued", "running", "succeeded", "failed", "retrying
 export type JobState = (typeof JOB_STATES)[number];
 export const JOB_TRANSITIONS: Transitions<JobState> = {
   queued: ["running", "cancelled"],
-  running: ["succeeded", "failed"],
+  running: ["succeeded", "failed", "retrying", "dead"], // 실패 판정과 재시도/폐기 결정은 한 번에 기록
   failed: ["retrying", "dead"],
   retrying: ["running", "dead", "cancelled"],
   succeeded: [],
