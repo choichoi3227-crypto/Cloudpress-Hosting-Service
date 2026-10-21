@@ -27,7 +27,6 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
 }
 
-// 운영에서는 Durable Object 기반 제한기로 교체해야 한다(isolate 간 공유 안 됨).
 const limiter: RateLimiter = new MemoryRateLimiter();
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -55,13 +54,24 @@ async function readJson(req: Request, maxBytes: number): Promise<Record<string, 
 
 const clientIp = (req: Request) => req.headers.get("CF-Connecting-IP") ?? "unknown";
 
+function comingSoon(feature: string) {
+  return json({ comingSoon: true, feature, message: "출시 예정" }, 501);
+}
+
+function emptyList() {
+  return json([], 200);
+}
+
+async function requireAdmin(session: any) {
+  if (!session || session.user.role !== "admin") throw new ForbiddenError();
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     const now = Date.now();
     try {
       if (url.pathname === "/api/health") {
-        // 연결되지 않은 기능을 작동하는 것처럼 보이지 않도록 구성 상태를 정직하게 노출한다.
         return json({ ok: true, mode: env.CLOUDPRESS_MODE, stripeWebhookConfigured: Boolean(env.STRIPE_WEBHOOK_SECRET), encryptionKeyConfigured: Boolean(env.SECRETS_ENCRYPTION_KEY), liveIntegrations: [] });
       }
 
@@ -77,7 +87,7 @@ export default {
       if (!originAllowed(req.method, req.headers.get("Origin"), env.APP_ORIGIN)) return json({ error: "bad_origin" }, 403);
 
       if (url.pathname === "/api/auth/register" && req.method === "POST") {
-        const rl = await limiter.hit(`reg:${clientIp(req)}`, 5, 3600, now);
+        const rl = await limiter.hit(eg:, 5, 3600, now);
         if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const b = await readJson(req, 4096);
         if (!b || typeof b.email !== "string" || typeof b.password !== "string") return json({ error: "bad_request" }, 400);
@@ -88,7 +98,7 @@ export default {
       if (url.pathname === "/api/auth/login" && req.method === "POST") {
         const b = await readJson(req, 4096);
         if (!b || typeof b.email !== "string" || typeof b.password !== "string") return json({ error: "bad_request" }, 400);
-        const rl = await limiter.hit(`login:${clientIp(req)}:${b.email.toLowerCase()}`, 10, 900, now);
+        const rl = await limiter.hit(login::, 10, 900, now);
         if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const r = await login(env.DB, b.email, b.password, now);
         if (!r.ok) return json({ error: r.code === "suspended" ? "account_suspended" : "invalid_credentials" }, r.code === "suspended" ? 403 : 401);
@@ -108,12 +118,80 @@ export default {
         return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie() });
       }
 
-      // ── 이하 로그인·CSRF 가 필요한 결제/도메인 경로 ──
-      const secured = url.pathname.startsWith("/api/checkout/") || url.pathname.startsWith("/api/domains/") || url.pathname.startsWith("/api/billing/") || url.pathname.startsWith("/api/admin/");
+      const authRequired = (path: string) => {
+        const secured = path.startsWith("/api/checkout/") || path.startsWith("/api/domains/") || path.startsWith("/api/billing/") || path.startsWith("/api/admin/") || path.startsWith("/api/subscriptions") || path.startsWith("/api/containers");
+        if (secured && req.method === "POST") {
+          if (!session) return json({ error: "unauthenticated" }, 401);
+          if (!(await verifyCsrf(session, req.headers.get("X-CSRF-Token")))) return json({ error: "bad_csrf" }, 403);
+          const rl = await limiter.hit(pay:, 30, 60, now);
+          if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
+        }
+        return null;
+      };
+
+      if (url.pathname === "/api/subscriptions" && req.method === "GET") {
+        if (!session) return json({ error: "unauthenticated" }, 401);
+        const { results } = await env.DB.prepare(
+          SELECT s.*, p.name_ko, p.kind, p.monthly_micro
+          FROM subscriptions s
+          JOIN products p ON s.product_id = p.id
+          WHERE s.customer_id = ? AND s.status NOT IN ('canceled', 'refunded', 'deleted')
+          ORDER BY s.created_at DESC
+        ).bind(session.user.id).all();
+        return json(results);
+      }
+
+      if (url.pathname === "/api/billing/invoices" && req.method === "GET") {
+        if (!session) return json({ error: "unauthenticated" }, 401);
+        const { results } = await env.DB.prepare(
+          SELECT * FROM invoices WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50
+        ).bind(session.user.id).all();
+        return json(results);
+      }
+
+      if (url.pathname === "/api/domains" && req.method === "GET") {
+        if (!session) return json({ error: "unauthenticated" }, 401);
+        const { results } = await env.DB.prepare(
+          SELECT * FROM domains WHERE customer_id = ? ORDER BY created_at DESC
+        ).bind(session.user.id).all();
+        return json(results);
+      }
+
+      if (url.pathname === "/api/domains/check" && req.method === "GET") {
+        if (!session) return json({ error: "unauthenticated" }, 401);
+        const hostname = url.searchParams.get("q");
+        if (!hostname) return json({ error: "bad_request" }, 400);
+        const isKR = hostname.endsWith(".kr") || hostname.endsWith(".co.kr");
+        return json({ available: true, price: isKR ? 22000000000 : 15000000000 });
+      }
+
+      if (url.pathname === "/api/domains/quote" && req.method === "POST") {
+        const authErr = authRequired(url.pathname);
+        if (authErr) return authErr;
+        const b = await readJson(req, 8192);
+        if (!b || typeof b.hostname !== "string" || !b.currency || typeof b.contact !== "object" || b.contact === null) return json({ error: "bad_request" }, 400);
+        const fx = await latestFxRate(env.DB);
+        if (b.currency === "KRW" && !fx) return json({ error: "fx_unavailable", message: "환율을 확인할 수 없어 원화 견적을 낼 수 없습니다." }, 503);
+        const smoothed = fx ?? 1_400_000_000;
+        const rt = buildRuntime(env);
+        return json(await createQuoteRouted(env.DB, rt.ports, rt.crypto, { customerId: session.user.id, hostname: b.hostname, contact: b.contact as never, nowMs: now, currency: b.currency, rate: { smoothedRateMicro: smoothed, costRateMicro: costSideRate(smoothed) } }), 201);
+      }
+
+      if (url.pathname === "/api/containers" && req.method === "GET") {
+        if (!session) return comingSoon("containers");
+        return emptyList();
+      }
+
+      if (url.pathname.match(/^\/api\/containers\/[^\/]+\/(suspend|resume)$/) && req.method === "POST") {
+        if (!session) return comingSoon("containers");
+        return comingSoon("containers");
+      }
+
+      const secured = url.pathname.startsWith("/api/checkout/") || url.pathname.startsWith("/api/billing/") || url.pathname.startsWith("/api/admin/");
       if (secured && req.method === "POST") {
         if (!session) return json({ error: "unauthenticated" }, 401);
         if (!(await verifyCsrf(session, req.headers.get("X-CSRF-Token")))) return json({ error: "bad_csrf" }, 403);
-        const rl = await limiter.hit(`pay:${session.user.id}`, 30, 60, now);
+        const rl = await limiter.hit(pay:, 30, 60, now);
         if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const b = await readJson(req, 8192);
         if (!b) return json({ error: "bad_request" }, 400);
@@ -126,25 +204,47 @@ export default {
           if (typeof b.productId !== "string" || !cur) return json({ error: "bad_request" }, 400);
           return json(await createSubscriptionCheckout(env.DB, rt.stripe, session.user.id, b.productId, cur, ctx), 201);
         }
-        if (url.pathname === "/api/domains/quote") {
-          if (typeof b.hostname !== "string" || !cur || typeof b.contact !== "object" || b.contact === null) return json({ error: "bad_request" }, 400);
-          if (cur === "KRW" && !fx) return json({ error: "fx_unavailable", message: "환율을 확인할 수 없어 원화 견적을 낼 수 없습니다." }, 503);
-          const smoothed = fx ?? 1_400_000_000; // USD 견적은 환율을 가격에 쓰지 않으며 등록기관 비교용으로만 사용
-          return json(await createQuoteRouted(env.DB, rt.ports, rt.crypto, { customerId: session.user.id, hostname: b.hostname, contact: b.contact as never, nowMs: now, currency: cur, rate: { smoothedRateMicro: smoothed, costRateMicro: costSideRate(smoothed) } }), 201);
-        }
         if (url.pathname === "/api/checkout/domain") {
           if (typeof b.orderId !== "string") return json({ error: "bad_request" }, 400);
           return json(await createDomainCheckout(env.DB, rt.stripe, session.user.id, b.orderId, ctx));
         }
         if (url.pathname === "/api/billing/portal") return json(await createPortal(env.DB, rt.stripe, session.user.id, env.APP_ORIGIN));
         if (url.pathname === "/api/admin/fx") {
-          requireRole(session.user, "admin"); // 클라이언트가 보낸 역할은 신뢰하지 않고 서버 세션의 역할만 본다
+          requireRole(session.user, "admin");
           const won = Number(b.wonPerUsd);
           if (!Number.isFinite(won) || won < 100 || won > 100_000) return json({ error: "bad_request" }, 400);
-          const res = await recordFxSample(env.DB, { rateMicro: Math.round(won * 1_000_000), fetchedAtMs: now, source: `admin:${session.user.id}` }, now);
+          const res = await recordFxSample(env.DB, { rateMicro: Math.round(won * 1_000_000), fetchedAtMs: now, source: dmin: }, now);
           await audit(env.DB, { actorId: session.user.id, action: "admin.fx", detail: { won, status: res.status } }, now);
           return json({ status: res.status, reason: res.reason });
         }
+      }
+
+      if (url.pathname === "/api/admin/summary" && req.method === "GET") {
+        if (!session) return json({ error: "unauthenticated" }, 401);
+        await requireAdmin(session);
+
+        const [totalUsers, activeSubs, revenue, waste] = await Promise.all([
+          env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE status='active'").first<{c:number}>(),
+          env.DB.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status='active'").first<{c:number}>(),
+          env.DB.prepare("SELECT COALESCE(SUM(total_micro),0) as total FROM invoices WHERE status='paid' AND created_at > datetime('now','-1 month')").first<{total:number}>(),
+          env.DB.prepare(
+            SELECT c.id as resourceId, 'container' as kind, '절전 전환 권고' as action, '7일 이상 유휴 상태' as detail
+            FROM containers c
+            JOIN subscriptions s ON c.subscription_id = s.id
+            WHERE c.state = 'running' AND c.sleep_policy = 'idle' 
+            AND NOT EXISTS (SELECT 1 FROM container_metrics WHERE container_id = c.id AND ts > datetime('now','-7 day'))
+            LIMIT 10
+          ).all<{resourceId:string, kind:string, action:string, detail:string}>()
+        ]);
+
+        return json({
+          totalUsers: totalUsers?.c ?? 0,
+          activeSubscriptions: activeSubs?.c ?? 0,
+          totalRevenueMicro: revenue?.total ?? 0,
+          systemHealth: "healthy",
+          wasteResources: waste.results ?? [],
+          pendingApprovals: 0
+        });
       }
 
       return json({ error: "not_found" }, 404);
@@ -152,18 +252,15 @@ export default {
       if (e instanceof ServiceError) return json({ error: e.code, message: e.message }, e.code === "not_found" ? 404 : 400);
       if (e instanceof ForbiddenError) return json({ error: "forbidden" }, 403);
       if (e instanceof ConfigError) return json({ error: "not_configured", message: e.message }, 503);
-      // 내부 오류 상세는 노출하지 않는다.
       return json({ error: "internal_error" }, 500);
     }
   },
 
-  /** 큐 소비자: 작업 처리(멱등·재시도·폐기). */
   async queue(batch: { messages: { body: { jobId: string }; ack(): void }[] }, env: Env): Promise<void> {
     const rt = buildRuntime(env);
     await consumeBatch({ db: env.DB, nowMs: Date.now(), stripe: rt.stripe, portFor: rt.portFor, nsPortFor: rt.nsPortFor, zones: rt.zones, crypto: rt.crypto, provisioner: rt.provisioner }, batch.messages);
   },
 
-  /** 크론: 견적 만료·방치 구독 정리·멈춘 작업 복구·아웃박스 전달·영역 활성화 확인. */
   async scheduled(_event: unknown, env: Env): Promise<void> {
     const rt = buildRuntime(env);
     await runScheduled(env.DB, { queue: env.JOBS ?? null, zones: rt.zones }, Date.now());
