@@ -2,161 +2,71 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title='도메인 관리 - CloudPress'>
-  <div class='space-y-8'>
-    <div class='flex items-center justify-between flex-wrap gap-4'>
-      <h1 class='text-3xl font-bold text-gray-900 dark:text-white'>도메인 관리</h1>
-      <button id='add-domain-btn' class='bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors'>도메인 등록</button>
+<Layout title="도메인 관리 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">도메인 관리</h1>
+      <button id="add-domain-btn" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">도메인 등록</button>
     </div>
 
-    <div class='bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800'>
-      <h2 class='text-lg font-semibold mb-4'>도메인 검색 및 등록</h2>
-      <div class='flex flex-col sm:flex-row gap-4 max-w-2xl'>
-        <input type='text' id='domain-search' placeholder='example.com' class='flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' />
-        <button id='search-btn' class='bg-primary hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap'>검색</button>
+    <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+      <h2 class="text-lg font-semibold mb-4">도메인 검색 및 등록</h2>
+      <div class="flex flex-col sm:flex-row gap-4 max-w-2xl">
+        <input type="text" id="domain-search" placeholder="example.com" class="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
+        <button id="search-btn" class="bg-primary hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap">검색</button>
       </div>
-      <div id='search-results' class='mt-4 hidden'></div>
+      <div id="search-results" class="mt-4 hidden"></div>
     </div>
 
-    <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
-      <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800'>
-        <h2 class='text-lg font-semibold'>내 도메인</h2>
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800">
+        <h2 class="text-lg font-semibold">내 도메인</h2>
       </div>
-      <div class='p-6' id='domains-list'>
-        <div class='text-center py-12 text-gray-500'>도메인을 불러오는 중...</div>
+      <div class="p-6" id="domains-list">
+        <div class="text-center py-12 text-gray-500">도메인을 불러오는 중...</div>
       </div>
     </div>
   </div>
 
-  <div id='domain-modal' class='fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden'>
-    <div class='bg-white dark:bg-slate-900 rounded-xl p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto'>
-      <h3 class='text-xl font-semibold mb-4'>도메인 등록</h3>
-      <form id='domain-form' class='space-y-4'>
-        <input type='hidden' name='hostname' id='modal-hostname' />
+  <div id="domain-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+    <div class="bg-white dark:bg-slate-900 rounded-xl p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+      <h3 class="text-xl font-semibold mb-4">도메인 등록</h3>
+      <form id="domain-form" class="space-y-4">
+        <input type="hidden" name="hostname" id="modal-hostname" />
         <div>
-          <label class='block text-sm font-medium mb-1'>연락처 이메일</label>
-          <input type='email' name='email' required class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' />
+          <label class="block text-sm font-medium mb-1">연락처 이메일</label>
+          <input type="email" name="email" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
         </div>
         <div>
-          <label class='block text-sm font-medium mb-1'>전화번호</label>
-          <input type='tel' name='phone' required class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' placeholder='+82.1012345678' />
+          <label class="block text-sm font-medium mb-1">전화번호</label>
+          <input type="tel" name="phone" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" placeholder="+82.1012345678" />
         </div>
         <div>
-          <label class='block text-sm font-medium mb-1'>이름</label>
-          <input type='text' name='name' required class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' />
+          <label class="block text-sm font-medium mb-1">이름</label>
+          <input type="text" name="name" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
         </div>
         <div>
-          <label class='block text-sm font-medium mb-1'>주소</label>
-          <input type='text' name='street' required class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' placeholder='도로명 주소' />
+          <label class="block text-sm font-medium mb-1">주소</label>
+          <input type="text" name="street" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" placeholder="도로명 주소" />
         </div>
-        <div class='grid gap-2 sm:grid-cols-2'>
+        <div class="grid gap-2 sm:grid-cols-2">
           <div>
-            <label class='block text-sm font-medium mb-1'>도시</label>
-            <input type='text' name='city' required class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' />
+            <label class="block text-sm font-medium mb-1">도시</label>
+            <input type="text" name="city" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
           </div>
           <div>
-            <label class='block text-sm font-medium mb-1'>우편번호</label>
-            <input type='text' name='postal' required class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' />
+            <label class="block text-sm font-medium mb-1">우편번호</label>
+            <input type="text" name="postal" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
           </div>
         </div>
-        <div class='flex gap-3 pt-4'>
-          <button type='button' id='modal-cancel' class='flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors'>취소</button>
-          <button type='submit' class='flex-1 bg-primary hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg font-medium transition-colors'>견적 요청</button>
+        <div class="flex gap-3 pt-4">
+          <button type="button" id="modal-cancel" class="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors">취소</button>
+          <button type="submit" class="flex-1 bg-primary hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg font-medium transition-colors">견적 요청</button>
         </div>
       </form>
     </div>
 
-  <script>
-    async function loadDomains() {
-      try {
-        const res = await fetch('/api/domains', { credentials: 'include' });
-        if (!res.ok) throw new Error('Failed');
-        const domains = await res.json();
-        const container = document.getElementById('domains-list');
-        if (domains.length === 0) {
-          container.innerHTML = '<div class=\"text-center py-12 text-gray-500\">등록된 도메인이 없습니다. <button id=\"add-first-domain\" class=\"text-primary hover:underline ml-2\">도메인 등록하기</button></div>';
-          document.getElementById('add-first-domain')?.addEventListener('click', () => document.getElementById('domain-search').focus());
-        } else {
-          container.innerHTML = domains.map(d => 
-            <div class='flex items-center justify-between py-3 border-b border-gray-100 dark:border-slate-800 last:border-0'>
-              <div class='flex items-center gap-4'>
-                <span class='font-mono text-lg font-medium'></span>
-                <div class='flex gap-2'>
-                  <span class='px-2 py-1 text-xs font-medium rounded-full ' + (d.ownershipStatus === 'verified' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400') + '>''</span>
-                  <span class='px-2 py-1 text-xs font-medium rounded-full ' + (d.sslStatus === 'active' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200') + '>''</span>
-                </div>
-              </div>
-              <div class='flex items-center gap-2'>
-                <span class='text-sm text-gray-500'></span>
-                <button class='text-primary hover:underline text-sm' onclick='manageDomain(\"' + d.id + '\")'>관리</button>
-              </div>
-            </div>
-          ).join('');
-        }
-      } catch (e) { console.error(e); }
-    }
-
-    document.getElementById('search-btn')?.addEventListener('click', async () => {
-      const hostname = document.getElementById('domain-search').value.trim();
-      if (!hostname) return alert('도메인 입력');
-      const resultsDiv = document.getElementById('search-results');
-      resultsDiv.classList.remove('hidden');
-      resultsDiv.innerHTML = '<div class=\"text-center py-4 text-gray-500\">검색 중...</div>';
-      try {
-        const res = await fetch('/api/domains/check?q=' + encodeURIComponent(hostname), { credentials: 'include' });
-        const data = await res.json();
-        if (data.available) {
-          resultsDiv.innerHTML = \
-            <div class=\"p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800\">
-              <p class=\"font-medium text-green-800 dark:text-green-300\">\ 등록 가능!</p>
-              <p class=\"text-sm text-green-600 dark:text-green-400 mt-1\">예상 연간 비용: 약 ₩\</p>
-              <button onclick=\"openDomainModal('\')\" class=\"mt-3 bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors\">등록 진행</button>
-            </div>
-          \;
-        } else {
-          resultsDiv.innerHTML = '<div class=\"p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800\"><p class=\"font-medium text-red-800 dark:text-red-300\">' + hostname + ' 이미 등록됨 또는 사용 불가</p></div>';
-        }
-      } catch (e) { resultsDiv.innerHTML = '<div class=\"p-4 text-red-600\">검색 실패</div>'; }
-    });
-
-    window.openDomainModal = (hostname) => {
-      document.getElementById('modal-hostname').value = hostname;
-      document.getElementById('domain-modal').classList.remove('hidden');
-      document.getElementById('domain-form').reset();
-    };
-    document.getElementById('modal-cancel')?.addEventListener('click', () => document.getElementById('domain-modal').classList.add('hidden'));
-    document.getElementById('domain-modal')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden'); });
-
-    document.getElementById('domain-form')?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const formData = new FormData(e.target);
-      const contact = {
-        email: formData.get('email'),
-        phone: formData.get('phone'),
-        postal_info: {
-          name: formData.get('name'),
-          address: { street: formData.get('street'), city: formData.get('city'), state: '', postal_code: formData.get('postal'), country_code: 'KR' }
-        }
-      };
-      const btn = e.target.querySelector('button[type=\"submit\"]');
-      btn.disabled = true; btn.textContent = '처리 중...';
-      try {
-        const res = await fetch('/api/domains/quote', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ hostname: formData.get('hostname'), contact, currency: 'KRW' })
-        });
-        if (res.ok) {
-          alert('견적이 생성되었습니다. 결제 페이지로 이동합니다.');
-          document.getElementById('domain-modal').classList.add('hidden');
-        } else alert('실패: ' + (await res.json()).error);
-      } catch { alert('네트워크 오류'); }
-      finally { btn.disabled = false; btn.textContent = '견적 요청'; }
-    });
-
-    loadDomains();
-    document.getElementById('add-domain-btn')?.addEventListener('click', () => document.getElementById('domain-search').focus());
-    document.getElementById('add-first-domain')?.addEventListener('click', () => document.getElementById('domain-search').focus());
+  <script type="module">
+    import { initDomainsPage } from '../scripts/domains.ts';
   </script>
 </Layout>
