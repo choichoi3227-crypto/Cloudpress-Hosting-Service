@@ -1,30 +1,28 @@
-// CloudPress API Worker 설정.
-// 실제 리소스 ID(database_id 등)는 가짜 값을 넣지 않는다. 아래 명령으로 생성한 뒤 직접 채운다:
-//   npx wrangler d1 create cloudpress-<env>
-//   npx wrangler queues create cloudpress-jobs-<env>
-// 비밀 값은 `npx wrangler secret put <NAME>` 으로만 등록한다(코드/설정에 넣지 않는다).
-// 필요한 Secrets: STRIPE_WEBHOOK_SECRET, STRIPE_SECRET_KEY, SECRETS_ENCRYPTION_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (이후 단계: SUPABASE_MANAGEMENT_TOKEN, NEON_API_KEY)
-// STRIPE_API_VERSION 은 운영자가 대시보드에서 확인한 버전을 vars 로 고정한다.
 {
   "name": "cloudpress-api-dev",
   "main": "src/worker.ts",
+  "assets": {
+    "directory": "./frontend/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": { "APP_ORIGIN": "http://localhost:4321", "CLOUDPRESS_MODE": "live" },
-  "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-dev", "migrations_dir": "migrations" }],
-  "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-dev" }], "consumers": [{ "queue": "cloudpress-jobs-dev", "max_batch_size": 10, "max_batch_timeout": 5 }] },
+  "vars": { "APP_ORIGIN": "https://cloud-press.co.kr", "CLOUDPRESS_MODE": "live" },
+  "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-production", "migrations_dir": "migrations" }],
+  "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-production" }], "consumers": [{ "queue": "cloudpress-jobs-production", "max_batch_size": 10, "max_batch_timeout": 5 }] },
   "triggers": { "crons": ["*/5 * * * *"] },
   "env": {
     "staging": {
       "name": "cloudpress-api-staging",
-      "vars": { "APP_ORIGIN": "https://staging.example.invalid", "CLOUDPRESS_MODE": "live" },
+      "vars": { "APP_ORIGIN": "https://staging.cloud-press.co.kr", "CLOUDPRESS_MODE": "live" },
       "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-staging", "migrations_dir": "migrations" }],
       "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-staging" }], "consumers": [{ "queue": "cloudpress-jobs-staging", "max_batch_size": 10, "max_batch_timeout": 5 }] },
       "triggers": { "crons": ["*/5 * * * *"] }
     },
     "production": {
       "name": "cloudpress-api",
-      "vars": { "APP_ORIGIN": "https://example.invalid", "CLOUDPRESS_MODE": "live" },
+      "vars": { "APP_ORIGIN": "https://cloud-press.co.kr", "CLOUDPRESS_MODE": "live" },
       "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-production", "migrations_dir": "migrations" }],
       "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-production" }], "consumers": [{ "queue": "cloudpress-jobs-production", "max_batch_size": 10, "max_batch_timeout": 5 }] },
       "triggers": { "crons": ["*/5 * * * *"] }
