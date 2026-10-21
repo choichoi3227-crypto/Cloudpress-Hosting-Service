@@ -118,42 +118,31 @@ export default {
         return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie() });
       }
 
-      const authRequired = (path: string) => {
-        const secured = path.startsWith("/api/checkout/") || path.startsWith("/api/domains/") || path.startsWith("/api/billing/") || path.startsWith("/api/admin/") || path.startsWith("/api/subscriptions") || path.startsWith("/api/containers");
-        if (secured && req.method === "POST") {
-          if (!session) return json({ error: "unauthenticated" }, 401);
-          if (!(await verifyCsrf(session, req.headers.get("X-CSRF-Token")))) return json({ error: "bad_csrf" }, 403);
-          const rl = await limiter.hit(pay:, 30, 60, now);
-          if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
-        }
-        return null;
-      };
-
       if (url.pathname === "/api/subscriptions" && req.method === "GET") {
         if (!session) return json({ error: "unauthenticated" }, 401);
-        const { results } = await env.DB.prepare(
+        const { results } = await env.DB.prepare(\
           SELECT s.*, p.name_ko, p.kind, p.monthly_micro
           FROM subscriptions s
           JOIN products p ON s.product_id = p.id
           WHERE s.customer_id = ? AND s.status NOT IN ('canceled', 'refunded', 'deleted')
           ORDER BY s.created_at DESC
-        ).bind(session.user.id).all();
+        \).bind(session.user.id).all();
         return json(results);
       }
 
       if (url.pathname === "/api/billing/invoices" && req.method === "GET") {
         if (!session) return json({ error: "unauthenticated" }, 401);
-        const { results } = await env.DB.prepare(
+        const { results } = await env.DB.prepare(\
           SELECT * FROM invoices WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50
-        ).bind(session.user.id).all();
+        \).bind(session.user.id).all();
         return json(results);
       }
 
       if (url.pathname === "/api/domains" && req.method === "GET") {
         if (!session) return json({ error: "unauthenticated" }, 401);
-        const { results } = await env.DB.prepare(
+        const { results } = await env.DB.prepare(\
           SELECT * FROM domains WHERE customer_id = ? ORDER BY created_at DESC
-        ).bind(session.user.id).all();
+        \).bind(session.user.id).all();
         return json(results);
       }
 
@@ -166,8 +155,10 @@ export default {
       }
 
       if (url.pathname === "/api/domains/quote" && req.method === "POST") {
-        const authErr = authRequired(url.pathname);
-        if (authErr) return authErr;
+        if (!session) return json({ error: "unauthenticated" }, 401);
+        if (!(await verifyCsrf(session, req.headers.get("X-CSRF-Token")))) return json({ error: "bad_csrf" }, 403);
+        const rl = await limiter.hit(pay:, 30, 60, now);
+        if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const b = await readJson(req, 8192);
         if (!b || typeof b.hostname !== "string" || !b.currency || typeof b.contact !== "object" || b.contact === null) return json({ error: "bad_request" }, 400);
         const fx = await latestFxRate(env.DB);
@@ -182,7 +173,7 @@ export default {
         return emptyList();
       }
 
-      if (url.pathname.match(/^\/api\/containers\/[^\/]+\/(suspend|resume)$/) && req.method === "POST") {
+      if (url.pathname.match(/^\\/api\\/containers\\/[^\\/]+\\/(suspend|resume)$/) && req.method === "POST") {
         if (!session) return comingSoon("containers");
         return comingSoon("containers");
       }
@@ -227,14 +218,14 @@ export default {
           env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE status='active'").first<{c:number}>(),
           env.DB.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status='active'").first<{c:number}>(),
           env.DB.prepare("SELECT COALESCE(SUM(total_micro),0) as total FROM invoices WHERE status='paid' AND created_at > datetime('now','-1 month')").first<{total:number}>(),
-          env.DB.prepare(
+          env.DB.prepare(\
             SELECT c.id as resourceId, 'container' as kind, '절전 전환 권고' as action, '7일 이상 유휴 상태' as detail
             FROM containers c
             JOIN subscriptions s ON c.subscription_id = s.id
             WHERE c.state = 'running' AND c.sleep_policy = 'idle' 
             AND NOT EXISTS (SELECT 1 FROM container_metrics WHERE container_id = c.id AND ts > datetime('now','-7 day'))
             LIMIT 10
-          ).all<{resourceId:string, kind:string, action:string, detail:string}>()
+          \).all<{resourceId:string, kind:string, action:string, detail:string}>()
         ]);
 
         return json({
