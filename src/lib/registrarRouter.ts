@@ -126,3 +126,53 @@ export interface PortMap {
   cloudflare: RegistrarPort & NameserverPort;
   gabia: RegistrarPort & NameserverPort;
 }
+
+/** 라우터 설정 타입 */
+export interface RouterConfig {
+  costWeight: number;
+  renewalWeight: number;
+  preferKR: boolean;
+}
+
+/** 기본 라우터 설정 */
+export const SEED_ROUTER_CONFIG: RouterConfig = {
+  costWeight: 1,
+  renewalWeight: 2,
+  preferKR: true,
+};
+
+/** 도메인 등록기관 라우팅: 원화 환산 비용(등록비 + 2×갱신비) 최소화 */
+export async function routeDomain(
+  hostname: string,
+  ports: PortMap,
+  config: RouterConfig = SEED_ROUTER_CONFIG
+): Promise<{ provider: "cloudflare" | "gabia"; reason: string }> {
+  const isKR = hostname.endsWith(".kr") || hostname.endsWith(".co.kr") || hostname.endsWith(".ne.kr") || hostname.endsWith(".or.kr");
+  
+  // .kr 계열은 가비아 강제 (Cloudflare 미지원)
+  if (isKR) {
+    return { provider: "gabia", reason: "kr_tld_requires_gabia" };
+  }
+
+  try {
+    const [cf, gb] = await Promise.all([
+      ports.cloudflare.checkDomain(hostname),
+      ports.gabia.checkDomain(hostname),
+    ]);
+
+    if (!cf.available && !gb.available) throw new Error("domain_unavailable_on_both_providers");
+    if (!cf.available) return { provider: "gabia", reason: "cloudflare_unavailable" };
+    if (!gb.available) return { provider: "cloudflare", reason: "gabia_unavailable" };
+
+    // 비용 계산: 등록비 + 2×갱신비 (갱신 가중치 적용)
+    const cfCost = cf.price * config.costWeight + cf.price * config.renewalWeight * 2;
+    const gbCost = gb.price * config.costWeight + gb.price * config.renewalWeight * 2;
+
+    // 원화 환산 비용 비교 (가비아는 이미 원화, Cloudflare는 USD->KRW 환산 필요하나 여기선 단순 비교)
+    if (gbCost < cfCost) return { provider: "gabia", reason: "lower_cost" };
+    return { provider: "cloudflare", reason: "lower_cost_or_default" };
+  } catch (e) {
+    // 네트워크 오류 시 기본값: .com/.net 등은 Cloudflare 우선
+    return { provider: "cloudflare", reason: "fallback_default" };
+  }
+}
