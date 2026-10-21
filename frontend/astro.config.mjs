@@ -7,6 +7,11 @@ export default defineConfig({
   output: 'static',
   integrations: [tailwind(), react()],
   vite: {
+    resolve: {
+      alias: {
+        '@': '/src',
+      },
+    },
     ssr: {
       noExternal: ['lucide-react']
     }
