@@ -446,6 +446,10 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       return handleApi(req, env);
     }
+    // /services/:id 는 정적 플레이스홀더 페이지(/services/_/)로 연결 (ID는 클라이언트에서 처리)
+    if (/^\/services\/[^/]+\/?$/.test(url.pathname) && !url.pathname.startsWith("/services/_")) {
+      return env.ASSETS.fetch(new Request(new URL("/services/_/", url), req));
+    }
     return env.ASSETS.fetch(req);
   },
 
