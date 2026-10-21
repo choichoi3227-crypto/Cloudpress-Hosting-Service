@@ -1,5 +1,11 @@
 ﻿---
 import Layout from '@/layouts/Layout.astro';
+
+// 정적 빌드용 플레이스홀더 경로 (/services/_/). 실제 ID는 클라이언트에서 URL로 읽고,
+// Worker가 /services/:id 요청을 이 페이지로 연결한다.
+export function getStaticPaths() {
+  return [{ params: { id: '_' } }];
+}
 ---
 
 <Layout title='서비스 상세 - CloudPress'>
@@ -86,9 +92,6 @@ import Layout from '@/layouts/Layout.astro';
 
   <script type='module'>
     import { initServiceDetail } from '@/scripts/service-detail.ts';
+    initServiceDetail();
   </script>
 </Layout>
-
-export async function getStaticPaths() {
-  return [];
-}
