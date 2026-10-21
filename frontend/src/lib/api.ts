@@ -1,3 +1,5 @@
+import { secureFetch } from '../scripts/security.ts';
+
 const API_BASE = import.meta.env.PUBLIC_API_URL || '/api';
 
 export interface User {
@@ -65,14 +67,7 @@ export interface ComingSoonResponse {
 }
 
 async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-    credentials: 'include',
-    ...options,
-  });
+  const res = await secureFetch(`${API_BASE}${path}`, options);
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: 'unknown_error' }));
@@ -102,11 +97,14 @@ export const api = {
     createCheckout: (productId: string, currency: 'KRW' | 'USD') =>
       fetchApi<{ url: string }>('/checkout/subscription', { method: 'POST', body: JSON.stringify({ productId, currency }) }),
     createPortal: () => fetchApi<{ url: string }>('/billing/portal', { method: 'POST' }),
+    suspend: (id: string) => fetchApi<{ ok: boolean }>(`/services/${id}/suspend`, { method: 'POST' }),
+    resume: (id: string) => fetchApi<{ ok: boolean }>(`/services/${id}/resume`, { method: 'POST' }),
+    cancel: (id: string) => fetchApi<{ ok: boolean }>(`/services/${id}/cancel`, { method: 'POST' }),
   },
 
   domains: {
-    list: () => fetchApi<Domain[]>('/domains'),
-    get: (id: string) => fetchApi<Domain>(`/domains/${id}`),
+    list: () => fetchApi<any[]>('/domains'),
+    get: (id: string) => fetchApi<any>(`/domains/${id}`),
     checkAvailability: (hostname: string) =>
       fetchApi<{ available: boolean; price: number }>(`/domains/check?q=${encodeURIComponent(hostname)}`),
     createQuote: (hostname: string, contact: any, currency: 'KRW' | 'USD') =>
@@ -119,21 +117,22 @@ export const api = {
   },
 
   containers: {
-    list: () => fetchApi<Container[]>('/containers'),
-    get: (id: string) => fetchApi<Container>(`/containers/${id}`),
+    list: () => fetchApi<any[]>('/containers'),
+    get: (id: string) => fetchApi<any>(`/containers/${id}`),
     suspend: (id: string) => fetchApi<{ ok: boolean }>(`/containers/${id}/suspend`, { method: 'POST' }),
     resume: (id: string) => fetchApi<{ ok: boolean }>(`/containers/${id}/resume`, { method: 'POST' }),
   },
 
   billing: {
-    invoices: () => fetchApi<Invoice[]>('/billing/invoices'),
-    getInvoice: (id: string) => fetchApi<Invoice>(`/billing/invoices/${id}`),
+    invoices: () => fetchApi<any[]>('/billing/invoices'),
+    getInvoice: (id: string) => fetchApi<any>(`/billing/invoices/${id}`),
+    upcoming: () => fetchApi<any>('/billing/upcoming'),
   },
 
   admin: {
-    summary: () => fetchApi<AdminSummary>('/admin/summary'),
-    users: () => fetchApi<User[]>('/admin/users'),
-    subscriptions: () => fetchApi<Subscription[]>('/admin/subscriptions'),
+    summary: () => fetchApi<any>('/admin/summary'),
+    users: () => fetchApi<any[]>('/admin/users'),
+    subscriptions: () => fetchApi<any[]>('/admin/subscriptions'),
     triggerBackup: (containerId: string, kind: 'full' | 'incremental' | 'binlog') =>
       fetchApi<{ jobId: string }>(`/admin/containers/${containerId}/backup`, { method: 'POST', body: JSON.stringify({ kind }) }),
     createSnapshot: (containerId: string) =>

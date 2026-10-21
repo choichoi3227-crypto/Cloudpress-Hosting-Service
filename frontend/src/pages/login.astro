@@ -2,75 +2,40 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title='로그인 - CloudPress'>
-  <div class='min-h-[calc(100vh-200px)] flex items-center justify-center py-12'>
-    <div class='w-full max-w-md'>
-      <div class='bg-white dark:bg-slate-900 p-8 rounded-xl border border-gray-200 dark:border-slate-800'>
-        <div class='text-center mb-8'>
-          <h1 class='text-2xl font-bold text-gray-900 dark:text-white'>CloudPress에 오신 것을 환영합니다</h1>
-          <p class='text-gray-500 dark:text-gray-400 mt-2'>계속하려면 로그인하세요</p>
+<Layout title="로그인 - CloudPress">
+  <div class="min-h-[calc(100vh-200px)] flex items-center justify-center py-12">
+    <div class="w-full max-w-md">
+      <div class="bg-white dark:bg-slate-900 p-8 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="text-center mb-8">
+          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">CloudPress에 오신 것을 환영합니다</h1>
+          <p class="text-gray-500 dark:text-gray-400 mt-2">계속하려면 로그인하세요</p>
         </div>
 
-        <form id='login-form' class='space-y-6'>
+        <form id="login-form" class="space-y-6">
           <div>
-            <label for='email' class='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5'>이메일</label>
-            <input type='email' id='email' name='email' required autocomplete='email' 
-              class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' />
+            <label for="email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">이메일</label>
+            <input type="email" id="email" name="email" required autocomplete="email" 
+              class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
           </div>
           <div>
-            <label for='password' class='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5'>비밀번호</label>
-            <input type='password' id='password' name='password' required autocomplete='current-password'
-              class='w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary' />
+            <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">비밀번호</label>
+            <input type="password" id="password" name="password" required autocomplete="current-password"
+              class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
           </div>
-          <div id='login-error' class='hidden p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-300 text-sm'></div>
-          <button type='submit' id='login-btn' class='w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors'>로그인</button>
+          <div id="login-error" class="hidden p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-300 text-sm"></div>
+          <button type="submit" id="login-btn" class="w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition-colors">로그인</button>
         </form>
 
-        <div class='mt-6 text-center'>
-          <p class='text-sm text-gray-500 dark:text-gray-400'>
-            계정이 없으신가요? <a href='/register' class='text-primary hover:underline font-medium'>회원가입</a>
+        <div class="mt-6 text-center">
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            계정이 없으신가요? <a href="/register" class="text-primary hover:underline font-medium">회원가입</a>
           </p>
         </div>
       </div>
     </div>
   </div>
 
-  <script>
-    document.getElementById('login-form')?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const formData = new FormData(e.target);
-      const errorDiv = document.getElementById('login-error');
-      const btn = document.getElementById('login-btn');
-      
-      errorDiv.classList.add('hidden');
-      btn.disabled = true;
-      btn.textContent = '로그인 중...';
-      
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            email: formData.get('email'),
-            password: formData.get('password')
-          })
-        });
-        
-        const data = await res.json();
-        if (res.ok) {
-          window.location.href = '/dashboard';
-        } else {
-          errorDiv.textContent = data.error === 'invalid_credentials' ? '이메일 또는 비밀번호가 올바르지 않습니다.' : (data.message || '로그인 실패');
-          errorDiv.classList.remove('hidden');
-        }
-      } catch {
-        errorDiv.textContent = '네트워크 오류가 발생했습니다.';
-        errorDiv.classList.remove('hidden');
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '로그인';
-      }
-    });
+  <script type="module">
+    import { initLogin } from '../scripts/login.ts';
   </script>
 </Layout>
