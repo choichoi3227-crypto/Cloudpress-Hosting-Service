@@ -4,7 +4,7 @@ import react from '@astrojs/react';
 
 export default defineConfig({
   site: 'https://cloud-press.co.kr',
-  output: 'static',
+  output: 'server',
   integrations: [tailwind(), react()],
   vite: {
     resolve: {
