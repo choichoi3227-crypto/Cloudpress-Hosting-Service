@@ -3,10 +3,9 @@ import tailwind from '@astrojs/tailwind';
 import react from '@astrojs/react';
 
 export default defineConfig({
-  site: 'https://cloudpress.example.com',
+  site: 'https://cloud-press.co.kr',
+  output: 'static',
   integrations: [tailwind(), react()],
-  output: 'server',
-  adapter: undefined,
   vite: {
     ssr: {
       noExternal: ['lucide-react']
