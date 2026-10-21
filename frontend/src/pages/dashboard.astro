@@ -1,0 +1,129 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="대시보드 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">대시보드</h1>
+      <div class="flex gap-3">
+        <a href="/dashboard/services/create" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+          새 서비스 생성
+        </a>
+      </div>
+    </div>
+
+    <!-- 통계 카드 -->
+    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">활성 서비스</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="active-services">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">월 예상 요금</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="monthly-cost">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">등록된 도메인</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="domain-count">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">스토리지 사용량</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="storage-usage">-</p>
+      </div>
+    </div>
+
+    <!-- 서비스 목록 -->
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">내 서비스</h2>
+        <a href="/dashboard/services" class="text-sm text-primary hover:underline">전체 보기</a>
+      </div>
+      <div class="p-6" id="services-list">
+        <div class="text-center py-12 text-gray-500">서비스를 불러오는 중...</div>
+      </div>
+    </div>
+
+    <!-- 최근 인보이스 -->
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">최근 청구서</h2>
+        <a href="/dashboard/billing" class="text-sm text-primary hover:underline">전체 보기</a>
+      </div>
+      <div class="p-6" id="invoices-list">
+        <div class="text-center py-12 text-gray-500">청구서를 불러오는 중...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function loadDashboard() {
+      try {
+        const [servicesRes, invoicesRes] = await Promise.all([
+          fetch('/api/subscriptions', { credentials: 'include' }),
+          fetch('/api/billing/invoices', { credentials: 'include' })
+        ]);
+        
+        if (servicesRes.ok) {
+          const services = await servicesRes.json();
+          document.getElementById('active-services').textContent = services.filter(s => s.status === 'active').length;
+          document.getElementById('monthly-cost').textContent = '₩' + (services.reduce((sum, s) => sum + (s.product?.monthlyMicro || 0), 0) / 1000000).toLocaleString();
+          
+          const container = document.getElementById('services-list');
+          if (services.length === 0) {
+            container.innerHTML = '<div class="text-center py-12 text-gray-500">등록된 서비스가 없습니다. <a href="/dashboard/services/create" class="text-primary hover:underline ml-2">서비스 생성하기</a></div>';
+          } else {
+            container.innerHTML = services.slice(0, 5).map(s => `
+              <div class="flex items-center justify-between py-3 border-b border-gray-100 dark:border-slate-800 last:border-0">
+                <div class="flex items-center gap-4">
+                  <span class="px-2 py-1 text-xs font-medium rounded-full bg-primary/10 text-primary">${s.product?.kind || 'CCS'}</span>
+                  <div>
+                    <p class="font-medium">${s.product?.nameKo || s.productId}</p>
+                    <p class="text-sm text-gray-500">${s.id.slice(0,8)}... • ${s.currentPeriodEnd ? new Date(s.currentPeriodEnd).toLocaleDateString('ko-KR') : '기간 없음'}</p>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="px-2 py-1 text-xs font-medium rounded-full ${
+                    s.status === 'active' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' :
+                    s.status === 'past_due' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400' :
+                    'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+                  }">${s.status}</span>
+                  <a href="/dashboard/services/${s.id}" class="text-sm text-primary hover:underline">관리</a>
+                </div>
+              </div>
+            `).join('');
+          }
+        }
+        
+        if (invoicesRes.ok) {
+          const invoices = await invoicesRes.json();
+          const container = document.getElementById('invoices-list');
+          if (invoices.length === 0) {
+            container.innerHTML = '<div class="text-center py-12 text-gray-500">청구 내역이 없습니다.</div>';
+          } else {
+            container.innerHTML = invoices.slice(0, 5).map(inv => `
+              <div class="flex items-center justify-between py-3 border-b border-gray-100 dark:border-slate-800 last:border-0">
+                <div>
+                  <p class="font-medium">청구서 #${inv.id.slice(0,8)}</p>
+                  <p class="text-sm text-gray-500">${new Date(inv.createdAt).toLocaleDateString('ko-KR')}</p>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="px-2 py-1 text-xs font-medium rounded-full ${
+                    inv.status === 'paid' ? 'bg-green-100 text-green-800' :
+                    inv.status === 'open' ? 'bg-blue-100 text-blue-800' :
+                    'bg-gray-100 text-gray-800'
+                  }">${inv.status}</span>
+                  <span class="font-medium tabular-nums">₩${(inv.totalMicro / 1000000).toLocaleString()}</span>
+                </div>
+              </div>
+            `).join('');
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    
+    loadDashboard();
+  </script>
+</Layout>
