@@ -28,7 +28,7 @@ export class GabiaRegistrar implements RegistrarPort, NameserverPort {
 
   private async ensureToken(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpiry - 60000) return this.accessToken;
-    const res = await fetch(\\/oauth/token\, {
+    const res = await fetch(`${this.baseUrl}/oauth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -37,7 +37,7 @@ export class GabiaRegistrar implements RegistrarPort, NameserverPort {
         client_secret: this.clientSecret,
       }),
     });
-    if (!res.ok) throw new Error(\Gabia OAuth failed: \\);
+    if (!res.ok) throw new Error(`Gabia OAuth failed: ${res.status}`);
     const data = await res.json() as { access_token: string; expires_in: number };
     this.accessToken = data.access_token;
     this.tokenExpiry = Date.now() + data.expires_in * 1000;
@@ -46,32 +46,32 @@ export class GabiaRegistrar implements RegistrarPort, NameserverPort {
 
   async checkDomain(hostname: string): Promise<{ available: boolean; price: number }> {
     const token = await this.ensureToken();
-    const res = await fetch(\\/domains/check?q=\\, {
-      headers: { Authorization: \Bearer \\ },
+    const res = await fetch(`${this.baseUrl}/domains/check?q=${encodeURIComponent(hostname)}`, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(\Gabia check failed: \\);
+    if (!res.ok) throw new Error(`Gabia check failed: ${res.status}`);
     const data = await res.json() as { available: boolean; price_won: number };
     return { available: data.available, price: data.price_won * 1000000 };
   }
 
   async registerDomain(hostname: string, contact: any): Promise<void> {
     const token = await this.ensureToken();
-    const res = await fetch(\\/domains/register\, {
+    const res = await fetch(`${this.baseUrl}/domains/register`, {
       method: "POST",
-      headers: { Authorization: \Bearer \\, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ domain: hostname, contact }),
     });
-    if (!res.ok) throw new Error(\Gabia register failed: \\);
+    if (!res.ok) throw new Error(`Gabia register failed: ${res.status}`);
   }
 
   async setNameservers(hostname: string, nss: string[]): Promise<void> {
     const token = await this.ensureToken();
-    const res = await fetch(\\/domains/\/nameservers\, {
+    const res = await fetch(`${this.baseUrl}/domains/${encodeURIComponent(hostname)}/nameservers`, {
       method: "PUT",
-      headers: { Authorization: \Bearer \\, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ nameservers: nss }),
     });
-    if (!res.ok) throw new Error(\Gabia NS update failed: \\);
+    if (!res.ok) throw new Error(`Gabia NS update failed: ${res.status}`);
   }
 }
 
@@ -81,19 +81,18 @@ export class MockGabiaClient implements RegistrarPort, NameserverPort {
   nameservers = new Map<string, string[]>();
 
   async checkDomain(hostname: string): Promise<{ available: boolean; price: number }> {
-    this.calls.push(\check:\\);
+    this.calls.push(`check:${hostname}`);
     if (this.cfg.unavailable?.includes(hostname)) return { available: false, price: 0 };
     return { available: true, price: 12000000000 };
   }
 
   async registerDomain(hostname: string, contact: any): Promise<void> {
-    this.calls.push(\egister:\\);
+    this.calls.push(`register:${hostname}`);
     if (this.cfg.registerBehavior === "throw") throw new Error("registration ambiguous");
   }
 
   async setNameservers(hostname: string, nss: string[]): Promise<void> {
-    this.calls.push(\
-s:\\);
+    this.calls.push(`ns:${hostname}`);
     if (this.cfg.failNs) throw new Error("NS delegation failed");
     this.nameservers.set(hostname, nss);
   }
