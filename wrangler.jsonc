@@ -2,7 +2,7 @@
   "name": "cloudpress-api-dev",
   "main": "src/worker.ts",
   "build": {
-    "command": "cd frontend && npm ci && npm run build",
+    "command": "cd frontend && npm install && npm run build",
     "cwd": "."
   },
   "assets": {
