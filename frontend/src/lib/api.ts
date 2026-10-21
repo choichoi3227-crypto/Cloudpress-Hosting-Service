@@ -1,4 +1,3 @@
-// API 클라이언트 - Worker 백엔드와 통신
 const API_BASE = import.meta.env.PUBLIC_API_URL || '/api';
 
 export interface User {
@@ -16,6 +15,7 @@ export interface Subscription {
     id: string;
     nameKo: string;
     kind: string;
+    monthlyMicro: number;
   };
 }
 
@@ -58,6 +58,12 @@ export interface AdminSummary {
   pendingApprovals: number;
 }
 
+export interface ComingSoonResponse {
+  comingSoon: boolean;
+  feature: string;
+  message: string;
+}
+
 async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -70,6 +76,9 @@ async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> 
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: 'unknown_error' }));
+    if (res.status === 501 && error.comingSoon) {
+      throw { comingSoon: true, feature: error.feature, message: error.message };
+    }
     throw new Error(error.error || `HTTP ${res.status}`);
   }
 
@@ -78,7 +87,6 @@ async function fetchApi<T>(path: string, options: RequestInit = {}): Promise<T> 
 }
 
 export const api = {
-  // 인증
   auth: {
     me: () => fetchApi<User>('/auth/me'),
     register: (email: string, password: string) => 
@@ -88,7 +96,6 @@ export const api = {
     logout: () => fetchApi<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
   },
 
-  // 구독/서비스
   subscriptions: {
     list: () => fetchApi<Subscription[]>('/subscriptions'),
     get: (id: string) => fetchApi<Subscription>(`/subscriptions/${id}`),
@@ -97,7 +104,6 @@ export const api = {
     createPortal: () => fetchApi<{ url: string }>('/billing/portal', { method: 'POST' }),
   },
 
-  // 도메인
   domains: {
     list: () => fetchApi<Domain[]>('/domains'),
     get: (id: string) => fetchApi<Domain>(`/domains/${id}`),
@@ -112,7 +118,6 @@ export const api = {
       fetchApi<{ ok: boolean }>(`/domains/${id}/records`, { method: 'PUT', body: JSON.stringify({ records }) }),
   },
 
-  // 컨테이너
   containers: {
     list: () => fetchApi<Container[]>('/containers'),
     get: (id: string) => fetchApi<Container>(`/containers/${id}`),
@@ -120,13 +125,11 @@ export const api = {
     resume: (id: string) => fetchApi<{ ok: boolean }>(`/containers/${id}/resume`, { method: 'POST' }),
   },
 
-  // 청구/인보이스
   billing: {
     invoices: () => fetchApi<Invoice[]>('/billing/invoices'),
     getInvoice: (id: string) => fetchApi<Invoice>(`/billing/invoices/${id}`),
   },
 
-  // 관리자
   admin: {
     summary: () => fetchApi<AdminSummary>('/admin/summary'),
     users: () => fetchApi<User[]>('/admin/users'),

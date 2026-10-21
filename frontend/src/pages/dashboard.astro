@@ -2,56 +2,69 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="대시보드 - CloudPress">
-  <div class="space-y-8">
-    <div class="flex items-center justify-between">
-      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">대시보드</h1>
-      <div class="flex gap-3">
-        <a href="/dashboard/services/create" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+<Layout title='대시보드 - CloudPress'>
+  <div class='space-y-8'>
+    <div class='flex items-center justify-between'>
+      <h1 class='text-3xl font-bold text-gray-900 dark:text-white'>대시보드</h1>
+      <div class='flex gap-3'>
+        <a href='/dashboard/services/create' class='bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors'>
           새 서비스 생성
         </a>
       </div>
     </div>
 
-    <!-- 통계 카드 -->
-    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
-        <p class="text-sm text-gray-500 dark:text-gray-400">활성 서비스</p>
-        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="active-services">-</p>
+    <div class='grid gap-6 md:grid-cols-2 lg:grid-cols-4'>
+      <div class='bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800'>
+        <p class='text-sm text-gray-500 dark:text-gray-400'>활성 서비스</p>
+        <p class='text-3xl font-bold text-gray-900 dark:text-white mt-1' id='active-services'>-</p>
       </div>
-      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
-        <p class="text-sm text-gray-500 dark:text-gray-400">월 예상 요금</p>
-        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="monthly-cost">-</p>
+      <div class='bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800'>
+        <p class='text-sm text-gray-500 dark:text-gray-400'>월 예상 요금</p>
+        <p class='text-3xl font-bold text-gray-900 dark:text-white mt-1' id='monthly-cost'>-</p>
       </div>
-      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
-        <p class="text-sm text-gray-500 dark:text-gray-400">등록된 도메인</p>
-        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="domain-count">-</p>
+      <div class='bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800'>
+        <p class='text-sm text-gray-500 dark:text-gray-400'>등록된 도메인</p>
+        <p class='text-3xl font-bold text-gray-900 dark:text-white mt-1' id='domain-count'>-</p>
       </div>
-      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
-        <p class="text-sm text-gray-500 dark:text-gray-400">스토리지 사용량</p>
-        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="storage-usage">-</p>
-      </div>
-    </div>
-
-    <!-- 서비스 목록 -->
-    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
-        <h2 class="text-lg font-semibold">내 서비스</h2>
-        <a href="/dashboard/services" class="text-sm text-primary hover:underline">전체 보기</a>
-      </div>
-      <div class="p-6" id="services-list">
-        <div class="text-center py-12 text-gray-500">서비스를 불러오는 중...</div>
+      <div class='bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800'>
+        <p class='text-sm text-gray-500 dark:text-gray-400'>스토리지 사용량</p>
+        <p class='text-3xl font-bold text-gray-900 dark:text-white mt-1' id='storage-usage'>-</p>
       </div>
     </div>
 
-    <!-- 최근 인보이스 -->
-    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
-        <h2 class="text-lg font-semibold">최근 청구서</h2>
-        <a href="/dashboard/billing" class="text-sm text-primary hover:underline">전체 보기</a>
+    <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
+      <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between'>
+        <h2 class='text-lg font-semibold'>내 서비스</h2>
+        <a href='/dashboard/services' class='text-sm text-primary hover:underline'>전체 보기</a>
       </div>
-      <div class="p-6" id="invoices-list">
-        <div class="text-center py-12 text-gray-500">청구서를 불러오는 중...</div>
+      <div class='p-6' id='services-list'>
+        <div class='text-center py-12 text-gray-500'>서비스를 불러오는 중...</div>
+      </div>
+    </div>
+
+    <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
+      <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between'>
+        <h2 class='text-lg font-semibold'>최근 청구서</h2>
+        <a href='/dashboard/billing' class='text-sm text-primary hover:underline'>전체 보기</a>
+      </div>
+      <div class='p-6' id='invoices-list'>
+        <div class='text-center py-12 text-gray-500'>청구서를 불러오는 중...</div>
+      </div>
+    </div>
+
+    <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
+      <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between'>
+        <h2 class='text-lg font-semibold'>컨테이너 인스턴스</h2>
+        <span class='px-2 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400'>출시 예정</span>
+      </div>
+      <div class='p-6'>
+        <div class='text-center py-12'>
+          <svg class='mx-auto h-12 w-12 text-gray-400' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+            <path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10'></path>
+          </svg>
+          <p class='mt-4 text-gray-500 dark:text-gray-400'>컨테이너 관리 기능은 준비 중입니다.</p>
+          <p class='mt-2 text-sm text-gray-400'>Cloudflare Containers 기반의 고성능 격리 환경을 곧 제공합니다.</p>
+        </div>
       </div>
     </div>
   </div>
@@ -67,31 +80,27 @@ import Layout from '../layouts/Layout.astro';
         if (servicesRes.ok) {
           const services = await servicesRes.json();
           document.getElementById('active-services').textContent = services.filter(s => s.status === 'active').length;
-          document.getElementById('monthly-cost').textContent = '₩' + (services.reduce((sum, s) => sum + (s.product?.monthlyMicro || 0), 0) / 1000000).toLocaleString();
+          document.getElementById('monthly-cost').textContent = '\u20A9' + (services.reduce((sum, s) => sum + (s.product?.monthlyMicro || 0), 0) / 1000000).toLocaleString();
           
           const container = document.getElementById('services-list');
           if (services.length === 0) {
-            container.innerHTML = '<div class="text-center py-12 text-gray-500">등록된 서비스가 없습니다. <a href="/dashboard/services/create" class="text-primary hover:underline ml-2">서비스 생성하기</a></div>';
+            container.innerHTML = '<div class=\"text-center py-12 text-gray-500\">등록된 서비스가 없습니다. <a href=\"/dashboard/services/create\" class=\"text-primary hover:underline ml-2\">서비스 생성하기</a></div>';
           } else {
-            container.innerHTML = services.slice(0, 5).map(s => `
-              <div class="flex items-center justify-between py-3 border-b border-gray-100 dark:border-slate-800 last:border-0">
-                <div class="flex items-center gap-4">
-                  <span class="px-2 py-1 text-xs font-medium rounded-full bg-primary/10 text-primary">${s.product?.kind || 'CCS'}</span>
+            container.innerHTML = services.slice(0, 5).map(s => \
+              <div class=\"flex items-center justify-between py-3 border-b border-gray-100 dark:border-slate-800 last:border-0\">
+                <div class=\"flex items-center gap-4\">
+                  <span class=\"px-2 py-1 text-xs font-medium rounded-full bg-primary/10 text-primary\">\</span>
                   <div>
-                    <p class="font-medium">${s.product?.nameKo || s.productId}</p>
-                    <p class="text-sm text-gray-500">${s.id.slice(0,8)}... • ${s.currentPeriodEnd ? new Date(s.currentPeriodEnd).toLocaleDateString('ko-KR') : '기간 없음'}</p>
+                    <p class=\"font-medium\">\</p>
+                    <p class=\"text-sm text-gray-500\">\... • \</p>
                   </div>
                 </div>
-                <div class="flex items-center gap-3">
-                  <span class="px-2 py-1 text-xs font-medium rounded-full ${
-                    s.status === 'active' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' :
-                    s.status === 'past_due' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400' :
-                    'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
-                  }">${s.status}</span>
-                  <a href="/dashboard/services/${s.id}" class="text-sm text-primary hover:underline">관리</a>
+                <div class=\"flex items-center gap-3\">
+                  <span class=\"px-2 py-1 text-xs font-medium rounded-full \\">\</span>
+                  <a href=\"/dashboard/services/\\" class=\"text-sm text-primary hover:underline\">관리</a>
                 </div>
               </div>
-            `).join('');
+            \).join('');
           }
         }
         
@@ -99,24 +108,20 @@ import Layout from '../layouts/Layout.astro';
           const invoices = await invoicesRes.json();
           const container = document.getElementById('invoices-list');
           if (invoices.length === 0) {
-            container.innerHTML = '<div class="text-center py-12 text-gray-500">청구 내역이 없습니다.</div>';
+            container.innerHTML = '<div class=\"text-center py-12 text-gray-500\">청구 내역이 없습니다.</div>';
           } else {
-            container.innerHTML = invoices.slice(0, 5).map(inv => `
-              <div class="flex items-center justify-between py-3 border-b border-gray-100 dark:border-slate-800 last:border-0">
+            container.innerHTML = invoices.slice(0, 5).map(inv => \
+              <div class=\"flex items-center justify-between py-3 border-b border-gray-100 dark:border-slate-800 last:border-0\">
                 <div>
-                  <p class="font-medium">청구서 #${inv.id.slice(0,8)}</p>
-                  <p class="text-sm text-gray-500">${new Date(inv.createdAt).toLocaleDateString('ko-KR')}</p>
+                  <p class=\"font-medium\">청구서 #\</p>
+                  <p class=\"text-sm text-gray-500\">\</p>
                 </div>
-                <div class="flex items-center gap-3">
-                  <span class="px-2 py-1 text-xs font-medium rounded-full ${
-                    inv.status === 'paid' ? 'bg-green-100 text-green-800' :
-                    inv.status === 'open' ? 'bg-blue-100 text-blue-800' :
-                    'bg-gray-100 text-gray-800'
-                  }">${inv.status}</span>
-                  <span class="font-medium tabular-nums">₩${(inv.totalMicro / 1000000).toLocaleString()}</span>
+                <div class=\"flex items-center gap-3\">
+                  <span class=\"px-2 py-1 text-xs font-medium rounded-full \\">\</span>
+                  <span class=\"font-medium tabular-nums\">\u20A9\</span>
                 </div>
               </div>
-            `).join('');
+            \).join('');
           }
         }
       } catch (e) {
