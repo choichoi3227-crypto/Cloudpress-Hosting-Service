@@ -1,36 +1,383 @@
-# Cloudpress-Hosting-Service
+﻿# CloudPress - 통합 클라우드 호스팅 플랫폼
 
-# 1. **실시간 설계 결정 기록(신규 작업 완료 즉시 데이터 반영)**
+Cloudflare Workers, D1, Queues, R2, Containers 기반의 완전한 매니지드 호스팅 플랫폼입니다.
 
-1. **CPU 사양**: Cloudflare Containers 공식 인스턴스 타입에 맞춰 상품을 재설계. 2 vCPU는 standard-3(Performance, WordPress Scale)만 해당. "목표 vCPU"와 "실제 vCPU"를 분리 저장.
-2. **영속성**: 컨테이너 디스크는 캐시. 진실의 원천은 R2 백업(mariabackup+binlog 전송) + 네이티브 스냅샷(베타, 빠른 복구용).
-3. **Supabase(Postgres)**: 별도 상품. WordPress는 MySQL 필요로 사용 불가. 재판매 약관 확인 필요(운영자).
-4. **SLA**: 99.99%는 HA 티어에서 이중화 + 자체 SLA 엔진으로 추구. 계약 SLA는 90일 실측 후 승격.
-5. **금액**: micro-USD 정수. 반올림은 청구 라인당 1회.
-6. **GitHub**: 코드 저장소로만 사용. Actions/자동 배포 없음.
-7. **인증**: PBKDF2-SHA256 100,000회(Workers WebCrypto 상한). 세션 토큰은 SHA-256 해시만 저장, `__Host-` 쿠키, CSRF 토큰(해시 저장)과 Origin 검사 병행. 로그인은 더미 해시로 사용자 존재 여부 노출 방지.
-8. **웹훅**: 서명 검증(5분 허용) → `webhook_events` 이벤트 ID 멱등 → 처리. `checkout.session.completed` 는 ID 연결만, 활성화·프로비저닝은 `invoice.paid` 에서만. 순서 역전은 500 후 Stripe 재시도로 해소.
-9. **아웃박스**: 큐 전송은 DB 작업 행(queued)을 기준으로 별도 전달(최소 1회). 소비자는 `idempotency_key` 로 멱등 처리.
-10. **속도 제한**: 현재 MemoryRateLimiter 는 isolate 단위. 운영 전 Durable Object 구현으로 교체 필요(알려진 제한).
-11. **ClouDB 다중 엔진**: MariaDB·MySQL(컨테이너+R2 백업), SQLite(D1 기반, 컨테이너 불필요), PostgreSQL(Neon 또는 Supabase). 엔진-제공자 조합은 D1 CHECK 제약으로 강제.
-12. **PostgreSQL 제공자 선택**: 비용(50)·성능(30)·신뢰도(20) 가중 점수(관리자 변경 가능). 동점은 Neon 우선. 실측 전 가정값(Neon 재개 지연 800ms, 두 제공자 신뢰도 동일)은 벤치마크 작업으로 교체해야 함. 플랜별 프로젝트 수 상한(Neon Launch 100/Scale 1,000)은 2차 자료 기준이라 공식 확인 필요.
-13. **Supabase의 역할**: "캐시"가 아니라 교차 제공자 HA 보조(복제본). 유료 Postgres를 캐시로 쓰면 낭비이므로 읽기 캐시는 Workers Cache/KV. 제공자 간 논리 복제의 실제 동작(DDL·시퀀스 미복제, 장애 전환 시 펜싱)은 스테이징에서 검증해야 함.
-14. **플랫폼 메타데이터 DB**: 기존 D1 유지(명령서 규정, 구현·테스트 완료). Neon 은 고객용 PostgreSQL 상품의 주 제공자로 사용.
-15. **최적화 원칙**: 성능 보호가 비용 절감보다 우선(OOM·스로틀·재시작이 있으면 하향 금지, 콜드 스타트 예산 준수, 상태 저장 서비스는 절전 금지). 자동 삭제 금지(삭제는 검토 요청 + 2단계 확인), 유료 플랜 변경은 고객 승인 필요(권고만 생성).
-16. **Cloudage 기본 제공량 10GB**: 월 $7.99 기본료는 유지, 초과분 $0.79/GB. 단, 초과 단가가 R2 원가(약 $0.015/GB-월) 대비 매우 높아 합리성 재검토 권장(관리자 설정으로 변경 가능).
-17. **R2 무료 제공량(10GB-월)은 계정 전체 공용**이다. 고객 약정 10GB 는 "논리 약정"이며, 실제로는 쓴 만큼만 물리 저장된다(씬 프로비저닝). 무료 제공량을 고객별로 중복 부여하지 않는다(명령서 22장).
-18. **저장 최적화**: 무손실 gzip(복원 해시 검증 후 채택, 절감률 10% 미만이면 원본 유지), 버킷 내 중복 제거(고객 간 중복 제거는 존재 여부 유출 위험으로 금지), IA 계층화(60일 미접근·읽기 드문 큰 객체만). 손실 변환(AVIF/WebP)은 버킷별 명시적 동의가 있을 때만, 해상도·SSIM·절감률 검증 통과 시 채택. 실제 인코더는 운영자 선택 사항(포트만 구현).
-19. **경제성 가드**: 계정 물리 사용량이 무료 제공량 이내면 절감 이득이 0이므로 최적화 작업을 하지 않는다. 이후에도 절감액이 처리 비용(Class A/B·CPU)을 넘을 때만 수행. 개별 객체 상태는 D1 이 아니라 R2 customMetadata 에 저장.
-20. **용량 재활용(대여)**: 30일 이력이 있는 버킷의 유휴 헤드룸(약정−최대사용−완충)의 50%를 256MiB 청크로 대여. 기본 범위는 같은 고객의 서비스 간(customer), 고객 간(platform)은 운영자 승인·약관·매출 영향 확인 후에만. 대여자의 과금 기준 약정은 줄지 않고 필요 시 최근 대여부터 회수(유예 72시간). 대여자·차용자 겸업과 회수 직후 7일 재대여는 금지.
-21. **압축 객체 읽기**: 클라이언트가 gzip 을 받을 수 있으면 압축본 그대로 전달, 아니면 Worker 에서 해제, Range 는 해제 후 절단. 대용량(25MB 초과)·이미 압축된 형식은 제외.
-22. **이미지 변환은 Cloudflare Images transformation**(운영자 결정). 고유 변환 5,000건/월 무료(계정 공용), 초과 $0.50/1,000건. 저장 절감 목적의 유료 변환은 객체당 비용($0.0005)이 월 절감액보다 커서 회수에 수년이 걸리므로 하지 않는다. 무료 저장 제공량 이내에서도 손실 변환은 하지 않는다. 무료 변환 예산은 버킷별로 공정 배분한다.
-23. **도메인 구매(Cloudflare Registrar API 베타)**: 검색·가용성/가격 확인·등록만 지원. 갱신·이전·연락처 변경은 API 미지원 → 운영자가 대시보드에서 수행(갱신 상태 노출·알림). 일부 TLD만 지원, 프리미엄 도메인 불가(.kr 등 미지원 확장은 `extension_not_supported_via_api`). 등록은 환불 불가이며 운영 계정의 기본 결제 수단으로 청구됨 → 고객 결제(Stripe) 확인 후에만 등록, 정확히 1회만 시도, 모호한 오류는 자동 재시도·환불 없이 운영자 검토.
-24. **도메인 가격**: 원가(마크업 없음) + max(최소 수수료 $2, 15%) + Stripe 수수료 보전, 센트 올림. 도메인은 연 단위 상품이라 "월 청구" 규칙의 예외다(운영자 승인 필요). 갱신은 만료 45일 전부터 결제 수집, 14일 전 운영자 수동 갱신 요구.
-25. **연결(네임서버 방식)**: 고객 도메인마다 운영 계정에 전체 영역(type=full)을 만들고 Cloudflare 네임서버를 안내. 운영 계정에 이미 있는 영역(운영자 본인 도메인 포함)은 고객이 가져갈 수 없음. 7일 넘게 활성화되지 않은 영역은 삭제(영역 한도 낭비·점유 방지). 활성화 확인은 5분→24시간으로 간격 확대. 영역 수 한도·요금은 공식 확인 필요(미확인).
-26. **고급 설정**: 영역 설정 20종 + DNSSEC, 규칙 8단계(캐시·리디렉션·WAF·속도 제한·URL/헤더 변환·구성). 플랫폼 보안 정책으로 취약한 값(SSL off/flexible, TLS 1.0/1.1)은 금지, 규칙 수는 단계별 한도로 로컬 검증. 고객에게 Cloudflare 토큰을 주지 않고 모든 변경은 서버를 거친다. 규칙 수 한도·일부 엔드포인트(activation_check, settings, rulesets, dnssec, workers/routes)는 실계정 통합 테스트로 확인 필요.
-27. **가비아 도메인 API**: 가비아는 '도메인 API 파트너'(REST, OAuth 2.0, 공급가는 시행사 원가 수준, 파트너 마진 자유, 등록/이전/연장/복구 지원)를 운영한다. 파트너 신청·승인과 별도 계약이 필요하고, 파트너가 고객 권리·서비스 책임과 개인정보 보호 의무를 진다. API 명세가 비공개라 엔드포인트를 추측하지 않고 `GabiaClient` 계약 + 모의 구현만 만들었다. 명세 수령 후 실제 클라이언트를 구현한다. 가비아 등록 도메인은 Cloudflare 영역 생성 후 가비아 NS 를 Cloudflare NS 로 변경(위임)하며, 위임은 멱등·재시도 가능.
-28. **등록기관 선택**: 가용성 → (등록가 + 2×갱신가)의 원화 환산 최소. 갱신은 등록한 곳에서만 가능하므로 갱신가에 가중치. .kr 계열은 Cloudflare 미지원이라 가비아. 한 곳 장애 시 다른 곳으로 진행.
-29. **환율·가격**: 환율은 정수 micro, 평활(중앙값)·급변 보류·오래됨 감지, USD 원가 환산 시 버퍼(+1.5%). 원화 가격은 [하한 마진, 시장 상한] 밴드 안에서 100원 단위, 인상은 빠르게(하한 미달 즉시)·인하는 느리게(임계 3%·최소 24시간·1회 10%·환율 신선도). 하한>상한이면 판매 중지. 구독료는 갱신 시 사전 고지·최대 인상 폭 준수. 개인별 차등가격은 하지 않는다.
-30. **통화**: 한국 고객 대상 표시·결제는 KRW 권장(Stripe 의 한국 로컬 카드·간편결제는 KRW 라인아이템 필수, 최소 100원), 카탈로그 기준·원가·회계는 USD 유지, 주문에 환율·통화를 고정 기록.
-31. **미해결(차단 이슈)**: Stripe 은 한국 등록 사업자의 계정 개설을 지원하지 않는다(지원 사업장 국가 목록에 한국 없음). 한국 사업자라면 국내 PG(정기결제 빌링키)로 결제 계층을 교체해야 한다. 결제 어댑터를 인터페이스로 분리해 대응한다(운영자 결정 필요).
-32. **보안 수정**: (a) 구매 전 선점 연결된 영역을 실제 구매자 우선으로 제거·재생성, (b) 영역 호스트명 유일성을 삭제되지 않은 행에만 적용해 만료·선점 제거 후 재연결 허용.
+## 🏗 아키텍처
+
+Cloudflare Workers, D1, Queues, R2, Containers 기반의 완전한 매니지드 호스팅 플랫폼입니다.
+
+## 🚀 빠른 시작
+
+### 사전 요구사항
+
+- Node.js 20+
+- Cloudflare 계정 (Workers, D1, R2, Queues, Containers 활성화)
+- Stripe 계정 (결제 처리)
+- GitHub 계정 (소스 관리)
+
+### 1. 저장소 클론 및 설정
+
+`ash
+git clone https://github.com/choichoi3227-crypto/Cloudpress-Hosting-Service.git
+cd Cloudpress-Hosting-Service
+`
+
+### 2. Cloudflare 리소스 생성
+
+`ash
+# D1 데이터베이스 생성 (개발/스테이징/프로덕션)
+wrangler d1 create cloudpress-dev
+wrangler d1 create cloudpress-staging
+wrangler d1 create cloudpress-production
+
+# 큐 생성
+wrangler queues create cloudpress-jobs-dev
+wrangler queues create cloudpress-jobs-staging
+wrangler queues create cloudpress-jobs-production
+
+# R2 버킷 생성 (백업/스토리지용)
+wrangler r2 bucket create cloudpress-backups
+wrangler r2 bucket create cloudpress-assets
+`
+
+### 3. 마이그레이션 실행
+
+`ash
+# 로컬 개발용 (SQLite)
+wrangler d1 execute cloudpress-dev --local --file=./migrations/0001_init.sql
+wrangler d1 execute cloudpress-dev --local --file=./migrations/0002_engines_rail_optimizer.sql
+wrangler d1 execute cloudpress-dev --local --file=./migrations/0003_storage_recycling.sql
+wrangler d1 execute cloudpress-dev --local --file=./migrations/0004_domains_zones.sql
+wrangler d1 execute cloudpress-dev --local --file=./migrations/0005_fx_providers.sql
+wrangler d1 execute cloudpress-dev --local --file=./migrations/0006_stripe_currency_jobs.sql
+wrangler d1 execute cloudpress-dev --local --file=./migrations/0007_container_backup_snapshot.sql
+
+# 원격 배포용
+wrangler d1 execute cloudpress-dev --remote --file=./migrations/0001_init.sql
+# ... 나머지 마이그레이션도 동일하게 실행
+`
+
+### 4. Secrets 설정 (필수!)
+
+`ash
+# 개발 환경
+wrangler secret put STRIPE_WEBHOOK_SECRET --env dev
+wrangler secret put STRIPE_SECRET_KEY --env dev
+wrangler secret put SECRETS_ENCRYPTION_KEY --env dev
+wrangler secret put CLOUDFLARE_API_TOKEN --env dev
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --env dev
+
+# 스테이징
+wrangler secret put STRIPE_WEBHOOK_SECRET --env staging
+wrangler secret put STRIPE_SECRET_KEY --env staging
+wrangler secret put SECRETS_ENCRYPTION_KEY --env staging
+wrangler secret put CLOUDFLARE_API_TOKEN --env staging
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --env staging
+
+# 프로덕션
+wrangler secret put STRIPE_WEBHOOK_SECRET --env production
+wrangler secret put STRIPE_SECRET_KEY --env production
+wrangler secret put SECRETS_ENCRYPTION_KEY --env production
+wrangler secret put CLOUDFLARE_API_TOKEN --env production
+wrangler secret put CLOUDFLARE_ACCOUNT_ID --env production
+`
+
+### 5. 환경 변수 설정
+
+`ash
+# 프론트엔드용
+cd frontend
+cp .env.example .env
+# PUBLIC_API_URL=https://your-worker.your-subdomain.workers.dev
+`
+
+### 6. 개발 서버 실행
+
+`ash
+# 백엔드 (별도 터미널)
+wrangler dev --env dev
+
+# 프론트엔드 (별도 터미널)
+cd frontend
+npm install
+npm run dev
+`
+
+### 7. 배포
+
+`ash
+# 프론트엔드 빌드 + 백엔드 배포 (자동)
+wrangler deploy --env production
+
+# 또는 환경 지정
+wrangler deploy --env staging
+wrangler deploy --env dev
+`
+
+## 🔐 필수 Secrets 상세
+
+| Secret Key | 설명 | 예시 값 | 필수 여부 |
+|------------|------|---------|-----------|
+| STRIPE_WEBHOOK_SECRET | Stripe 웹훅 서명 검증용 | whsec_... | 필수 |
+| STRIPE_SECRET_KEY | Stripe API 호출용 Secret Key | sk_live_... 또는 sk_test_... | 필수 |
+| STRIPE_API_VERSION | Stripe API 버전 고정 | 2024-06-20 | 필수 |
+| SECRETS_ENCRYPTION_KEY | 32바이트 Base64 인코딩 암호화 키 | base64_encode(32_random_bytes) | 필수 |
+| CLOUDFLARE_API_TOKEN | Cloudflare API 토큰 (Zone, DNS, Account 읽기/쓰기) | CF_API_TOKEN_... | 필수 |
+| CLOUDFLARE_ACCOUNT_ID | Cloudflare 계정 ID | abc123... | 필수 |
+| GABIA_CLIENT_ID | 가비아 파트너 API 클라이언트 ID | (가비아 파트너 시) | 선택 |
+| GABIA_CLIENT_SECRET | 가비아 파트너 API 클라이언트 시크릿 | (가비아 파트너 시) | 선택 |
+| SUPABASE_MANAGEMENT_TOKEN | Supabase Management API 토큰 | (PostgreSQL 상품용) | 선택 |
+| NEON_API_KEY | Neon API 키 | (PostgreSQL 상품용) | 선택 |
+
+### SECRETS_ENCRYPTION_KEY 생성 방법
+
+`ash
+# Linux/macOS
+openssl rand -base64 32
+
+# PowerShell
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))
+`
+
+## 🔧 Wrangler 설정 (wrangler.jsonc)
+
+주요 설정 파일은 wrangler.jsonc를 참조하세요.
+
+## 🗄 데이터베이스 스키마 (주요 테이블)
+
+### 사용자 및 인증
+- users - 사용자 계정 (role: customer/developer/engineer/manager/admin)
+- user_sessions - 세션 관리 (토큰 해시, CSRF 해시)
+- affiliate_users/referrals/commissions/payouts - 제휴 시스템
+
+### 상품 및 구독
+- products - 상품 카탈로그 (CCS, ClouDB, Cloudage, WordPress, CAS 등)
+- prices - 가격 버저닝 (불변)
+- subscriptions - 구독 상태 머신
+- subscription_items - 구독 구성 아이템
+- invoices/payments/refunds - 청구 및 결제
+
+### 인프라
+- containers - 컨테이너 인스턴스 (상태, 스펙, 스냅샷)
+- container_instances - 실행 중인 인스턴스 상세
+- container_images - 도커 이미지 버전 관리
+- databases - DB 인스턴스 (엔진, 제공자, HA)
+- storage_buckets - R2 버킷 (수명주기, 압축)
+- dns_zones - Cloudflare 존 관리
+- domain_orders - 도메인 주문/결제/등록
+
+### 작업 큐
+- deployment_jobs - 배포/프로비저닝 작업 (상태 머신)
+- container_jobs - 컨테이너 전용 작업
+- backup_jobs/chunks - 백업 작업 및 청크
+- queue_jobs - 큐 메시지 추적
+
+### 백업/스냅샷
+- backup_jobs - 백업 작업 (전체/증분/binlog)
+- backup_chunks - 암호화된 청크 (R2 저장)
+- snapshots - Cloudflare 스냅샷 (30일 TTL)
+- restore_jobs - 복원 작업
+
+### 관리/감사
+- admin_settings - 관리자 설정 (키-값)
+- audit_logs - 감사 로그 (행위자, 행동, 대상, 상세)
+- notifications - 알림 (사용자/운영자, 심각도)
+- sla_probes/incidents - SLA 모니터링
+
+## 🎨 프론트엔드 구조
+
+frontend/
+src/
+pages/
+index.astro           # 랜딩 페이지
+login.astro           # 로그인
+register.astro        # 회원가입
+dashboard.astro       # 고객 대시보드
+billing.astro         # 청구 관리
+domains.astro         # 도메인 관리
+services/
+index.astro       # 서비스 목록
+[id].astro        # 서비스 상세
+admin/
+index.astro       # 관리자 대시보드
+scripts/                  # TypeScript 모듈 (esbuild 호환)
+admin-dashboard.ts
+billing.ts
+dashboard.ts
+domains.ts
+login.ts
+register.ts
+security.ts
+service-detail.ts
+services.ts
+lib/
+api.ts                # API 클라이언트 (보안 포함)
+components/ui/            # 재사용 UI 컴포넌트
+layouts/Layout.astro      # 공통 레이아웃
+styles/global.css         # Tailwind + 커스텀
+astro.config.mjs              # output: 'static'
+tailwind.config.mjs
+package.json
+
+## 🔑 권한 시스템 (RBAC)
+
+| 역할 | 권한 |
+|------|------|
+| customer | 본인 서비스/도메인/청구 관리, 프로필 수정 |
+| developer | 고객 권한 + API 문서 접근, 개발 도구 |
+| engineer | 개발자 권한 + 컨테이너 관리, 배포 작업 승인 |
+| manager | 엔지니어 권한 + 사용자 관리(정지/강등), 구독 강제 처리, 설정 변경 |
+| admin | 모든 권한 + 사용자 블랙리스트, 리소스 압수, 시스템 설정, FX 환율 |
+
+## 📦 상품 카탈로그
+
+주요 상품들은 wrangler.jsonc 및 catalog.ts를 참조하세요.
+
+## 🔄 작업 큐 및 스케줄러
+
+### 크론 작업 (5분마다)
+- 견적 만료 처리
+- 구독 갱신/연체 처리
+- 멈춘 작업 복구 (recoverStuckJobs)
+- 아웃박스 메시지 전달
+- 도메인 갱신 알림 (45일 전)
+- SLA 프로브 실행
+- 백업 스케줄 실행
+
+### 작업 상태 머신
+queued -> running -> succeeded
+          \-> retrying (지수 백오프: 30s, 60s, 120s... 최대 1시간)
+          \-> dead (최대 5회 실패 또는 영구 오류)
+
+### 멱등성 보장
+- 모든 작업은 idempotency_key로 중복 실행 방지
+- 아웃박스 패턴으로 DB 트랜잭션 + 큐 전송 원자성 보장
+- 큐 소비자는 항상 ack() 호출 (백오프 무력화 방지)
+
+## 🌐 도메인 등록 시스템
+
+### 지원 등록기관
+1. Cloudflare Registrar (기본) - .com, .net, .org 등
+2. Gabia (파트너 API) - .kr, .co.kr 등 한국 TLD
+
+### 가격 정책
+원가 + max(, 15%) + Stripe 수수료 보전 -> 센트 올림
+- 한국 TLD(.kr)는 Gabia 강제 라우팅
+- 갱신 비용 가중치 2배 적용 (장기 비용 최소화)
+- 장애 시 타 등록기관 자동 페일오버
+
+### 네임서버 위임
+- 고객 도메인 -> Cloudflare 존 생성 (type=full)
+- Cloudflare NS 안내 -> 고객 등록기관에서 변경
+- 7일 미활성 존 자동 정리
+
+## 💾 백업 및 스냅샷
+
+### 백업 파이프라인
+1. 컨테이너 내부 DB 덤프 (mariabackup/pg_dump)
+2. 스트리밍 청크 분할 (5MB)
+3. HKDF 파생 키로 AES-GCM 암호화
+4. R2 업로드 (청크별 메타데이터 포함)
+5. 매니페스트 SHA256 검증
+
+### 보존 정책
+- 전체 백업: 30일
+- 증분 백업: 7일
+- Binlog: 3일
+- 스냅샷: 30일 TTL (복원 시 갱신), 최대 10개/컨테이너
+- 복원 체인 보호: 가장 최근 Full + 이후 체인 유지
+
+## 📊 모니터링 및 SLA
+
+### SLA 목표
+- 계약 SLA: 99.9% (90일 실측 후 99.99% 승격 목표)
+- HA 티어: 이중화 + 자체 SLA 엔진으로 99.99% 추구
+
+### 메트릭 수집
+- 컨테이너: CPU, 메모리, 디스크, 요청수, P95 레이턴시, 에러율
+- 도메인: DNS 응답, SSL 상태, 존 동기화
+- 결제: Stripe 웹훅 성공률, 체크아웃 완료율
+
+### 알림 채널
+- 사용자: 이메일, 대시보드 알림
+- 운영자: 크리티컬 알림 (Slack/이메일 연동 가능)
+
+## 🛡 보안
+
+### 인증
+- PBKDF2-SHA256 (100,000회 반복)
+- 세션 토큰 SHA-256 해시만 저장
+- __Host- 접두사 쿠키, SameSite=Strict
+- CSRF 토큰 (해시 저장) + Origin 검사
+
+### 암호화
+- AES-GCM (256비트) for secrets
+- HKDF 키 파생 (백업 청크별 고유 키)
+- TLS 1.2+ 강제 (Cloudflare Edge)
+
+### 네트워크
+- CSP: default-src 'none'; frame-ancestors 'none'
+- HSTS: 2년 preload
+- Rate Limiting: 메모리 기반 (운영 시 Durable Object로 교체 필요)
+
+## 🚨 알려진 제한사항
+
+1. Durable Object Rate Limiter 미구현 - 현재 메모리 기반 (isolate 단위)
+2. Gabia 실 API 미연동 - 파트너 계약 및 API 명세 필요
+3. 컨테이너 프로비저너 미구현 - provision/suspend/resume 작업은 폐기+운영자 알림
+4. Stripe 한국 법인 미지원 - 한국 사업자 시 국내 PG(포트원/토스페이먼츠) 필요
+5. Gabia API 명세 비공개 - 모의 구현만 되어 있음
+6. 실제 컨테이너 이미지 미배포 - cloudpress/ccs-* 도커 이미지 필요
+6. 프로비저너용 Durable Object 미구현 - 컨테이너 시작/중지 실제 API 연동 필요
+
+## 📁 프로젝트 구조
+
+Cloudpress-Hosting-Service/
+src/
+worker.ts                    # 메인 엔트리포인트
+runtime.ts                   # 런타임 팩토리 (mock/live)
+lib/                         # 핵심 비즈니스 로직 (30개 모듈)
+frontend/                        # Astro + React + Tailwind
+migrations/                      # D1 마이그레이션 (7개)
+test/                            # Vitest 테스트 (24개 파일)
+docs/DECISIONS.md                # 설계 결정 기록
+wrangler.jsonc                   # Cloudflare 설정
+tsconfig.json
+package.json
+README.md
+
+## 🧪 테스트 실행
+
+`ash
+# 전체 테스트
+npm run test
+
+# 타입 체크
+npm run typecheck
+
+# 전체 검증
+npm run check
+`
+
+## 📝 라이선스
+
+MIT License - 자세한 내용은 LICENSE 참조
+
+## 🤝 기여하기
+
+1. Fork the repository
+2. Create feature branch (git checkout -b feature/amazing-feature)
+3. Commit changes (git commit -m 'Add amazing feature')
+4. Push to branch (git push origin feature/amazing-feature)
+5. Open Pull Request
+
+## 📞 지원
+
+- 이슈 리포팅: GitHub Issues
+- 보안 이슈: security@cloudpress.example.com
+- 문서: docs/DECISIONS.md
+
+---
+
+CloudPress - 차세대 클라우드 호스팅 플랫폼
+Built with on Cloudflare Workers, D1, R2, Queues, Containers
