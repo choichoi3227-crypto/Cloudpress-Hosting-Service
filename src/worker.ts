@@ -1,4 +1,4 @@
-import { type D1Like, type QueueLike } from "./lib/db";
+﻿import { type D1Like, type QueueLike } from "./lib/db";
 import { registerUser, login, getSession, logout, verifyCsrf, originAllowed, sessionCookie, clearSessionCookie, parseCookie, SESSION_COOKIE } from "./lib/auth";
 import { handleStripeWebhook } from "./lib/webhooks";
 import { MemoryRateLimiter, type RateLimiter } from "./lib/ratelimit";
@@ -87,7 +87,7 @@ export default {
       if (!originAllowed(req.method, req.headers.get("Origin"), env.APP_ORIGIN)) return json({ error: "bad_origin" }, 403);
 
       if (url.pathname === "/api/auth/register" && req.method === "POST") {
-        const rl = await limiter.hit(eg:, 5, 3600, now);
+        const rl = await limiter.hit("reg:" + clientIp(req), 5, 3600, now);
         if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const b = await readJson(req, 4096);
         if (!b || typeof b.email !== "string" || typeof b.password !== "string") return json({ error: "bad_request" }, 400);
@@ -98,7 +98,7 @@ export default {
       if (url.pathname === "/api/auth/login" && req.method === "POST") {
         const b = await readJson(req, 4096);
         if (!b || typeof b.email !== "string" || typeof b.password !== "string") return json({ error: "bad_request" }, 400);
-        const rl = await limiter.hit(login::, 10, 900, now);
+        const rl = await limiter.hit("login:" + clientIp(req) + ":" + b.email.toLowerCase(), 10, 900, now);
         if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const r = await login(env.DB, b.email, b.password, now);
         if (!r.ok) return json({ error: r.code === "suspended" ? "account_suspended" : "invalid_credentials" }, r.code === "suspended" ? 403 : 401);
@@ -120,29 +120,21 @@ export default {
 
       if (url.pathname === "/api/subscriptions" && req.method === "GET") {
         if (!session) return json({ error: "unauthenticated" }, 401);
-        const { results } = await env.DB.prepare(\
-          SELECT s.*, p.name_ko, p.kind, p.monthly_micro
-          FROM subscriptions s
-          JOIN products p ON s.product_id = p.id
-          WHERE s.customer_id = ? AND s.status NOT IN ('canceled', 'refunded', 'deleted')
-          ORDER BY s.created_at DESC
-        \).bind(session.user.id).all();
+        const { results } = await env.DB.prepare(
+          "SELECT s.*, p.name_ko, p.kind, p.monthly_micro FROM subscriptions s JOIN products p ON s.product_id = p.id WHERE s.customer_id = ? AND s.status NOT IN ('canceled', 'refunded', 'deleted') ORDER BY s.created_at DESC"
+        ).bind(session.user.id).all();
         return json(results);
       }
 
       if (url.pathname === "/api/billing/invoices" && req.method === "GET") {
         if (!session) return json({ error: "unauthenticated" }, 401);
-        const { results } = await env.DB.prepare(\
-          SELECT * FROM invoices WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50
-        \).bind(session.user.id).all();
+        const { results } = await env.DB.prepare("SELECT * FROM invoices WHERE customer_id = ? ORDER BY created_at DESC LIMIT 50").bind(session.user.id).all();
         return json(results);
       }
 
       if (url.pathname === "/api/domains" && req.method === "GET") {
         if (!session) return json({ error: "unauthenticated" }, 401);
-        const { results } = await env.DB.prepare(\
-          SELECT * FROM domains WHERE customer_id = ? ORDER BY created_at DESC
-        \).bind(session.user.id).all();
+        const { results } = await env.DB.prepare("SELECT * FROM domains WHERE customer_id = ? ORDER BY created_at DESC").bind(session.user.id).all();
         return json(results);
       }
 
@@ -157,13 +149,13 @@ export default {
       if (url.pathname === "/api/domains/quote" && req.method === "POST") {
         if (!session) return json({ error: "unauthenticated" }, 401);
         if (!(await verifyCsrf(session, req.headers.get("X-CSRF-Token")))) return json({ error: "bad_csrf" }, 403);
-        const rl = await limiter.hit(pay:, 30, 60, now);
+        const rl = await limiter.hit("pay:" + session.user.id, 30, 60, now);
         if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const b = await readJson(req, 8192);
         if (!b || typeof b.hostname !== "string" || !b.currency || typeof b.contact !== "object" || b.contact === null) return json({ error: "bad_request" }, 400);
         const fx = await latestFxRate(env.DB);
         if (b.currency === "KRW" && !fx) return json({ error: "fx_unavailable", message: "환율을 확인할 수 없어 원화 견적을 낼 수 없습니다." }, 503);
-        const smoothed = fx ?? 1_400_000_000;
+        const smoothed = fx ?? 1400000000;
         const rt = buildRuntime(env);
         return json(await createQuoteRouted(env.DB, rt.ports, rt.crypto, { customerId: session.user.id, hostname: b.hostname, contact: b.contact as never, nowMs: now, currency: b.currency, rate: { smoothedRateMicro: smoothed, costRateMicro: costSideRate(smoothed) } }), 201);
       }
@@ -173,7 +165,7 @@ export default {
         return emptyList();
       }
 
-      if (url.pathname.match(/^\\/api\\/containers\\/[^\\/]+\\/(suspend|resume)$/) && req.method === "POST") {
+      if (url.pathname.match(/^\/api\/containers\/[^\/]+\/(suspend|resume)$/) && req.method === "POST") {
         if (!session) return comingSoon("containers");
         return comingSoon("containers");
       }
@@ -182,7 +174,7 @@ export default {
       if (secured && req.method === "POST") {
         if (!session) return json({ error: "unauthenticated" }, 401);
         if (!(await verifyCsrf(session, req.headers.get("X-CSRF-Token")))) return json({ error: "bad_csrf" }, 403);
-        const rl = await limiter.hit(pay:, 30, 60, now);
+        const rl = await limiter.hit("pay:" + session.user.id, 30, 60, now);
         if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
         const b = await readJson(req, 8192);
         if (!b) return json({ error: "bad_request" }, 400);
@@ -203,8 +195,8 @@ export default {
         if (url.pathname === "/api/admin/fx") {
           requireRole(session.user, "admin");
           const won = Number(b.wonPerUsd);
-          if (!Number.isFinite(won) || won < 100 || won > 100_000) return json({ error: "bad_request" }, 400);
-          const res = await recordFxSample(env.DB, { rateMicro: Math.round(won * 1_000_000), fetchedAtMs: now, source: dmin: }, now);
+          if (!Number.isFinite(won) || won < 100 || won > 100000) return json({ error: "bad_request" }, 400);
+          const res = await recordFxSample(env.DB, { rateMicro: Math.round(won * 1000000), fetchedAtMs: now, source: "admin:" + session.user.id }, now);
           await audit(env.DB, { actorId: session.user.id, action: "admin.fx", detail: { won, status: res.status } }, now);
           return json({ status: res.status, reason: res.reason });
         }
@@ -218,14 +210,9 @@ export default {
           env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE status='active'").first<{c:number}>(),
           env.DB.prepare("SELECT COUNT(*) as c FROM subscriptions WHERE status='active'").first<{c:number}>(),
           env.DB.prepare("SELECT COALESCE(SUM(total_micro),0) as total FROM invoices WHERE status='paid' AND created_at > datetime('now','-1 month')").first<{total:number}>(),
-          env.DB.prepare(\
-            SELECT c.id as resourceId, 'container' as kind, '절전 전환 권고' as action, '7일 이상 유휴 상태' as detail
-            FROM containers c
-            JOIN subscriptions s ON c.subscription_id = s.id
-            WHERE c.state = 'running' AND c.sleep_policy = 'idle' 
-            AND NOT EXISTS (SELECT 1 FROM container_metrics WHERE container_id = c.id AND ts > datetime('now','-7 day'))
-            LIMIT 10
-          \).all<{resourceId:string, kind:string, action:string, detail:string}>()
+          env.DB.prepare(
+            "SELECT c.id as resourceId, 'container' as kind, '절전 전환 권고' as action, '7일 이상 유휴 상태' as detail FROM containers c JOIN subscriptions s ON c.subscription_id = s.id WHERE c.state = 'running' AND c.sleep_policy = 'idle' AND NOT EXISTS (SELECT 1 FROM container_metrics WHERE container_id = c.id AND ts > datetime('now','-7 day')) LIMIT 10"
+          ).all<{resourceId:string, kind:string, action:string, detail:string}>()
         ]);
 
         return json({
