@@ -1,97 +1,92 @@
-﻿---
-import Layout from '@/layouts/Layout.astro';
 
-// 정적 빌드용 플레이스홀더 경로 (/services/_/). 실제 ID는 클라이언트에서 URL로 읽고,
-// Worker가 /services/:id 요청을 이 페이지로 연결한다.
-export function getStaticPaths() {
-  return [{ params: { id: '_' } }];
-}
+---
+import Layout from '@/layouts/Layout.astro';
+export const prerender = false;
 ---
 
-<Layout title='서비스 상세 - CloudPress'>
-  <div class='space-y-8'>
-    <div class='flex items-center justify-between'>
+<Layout title="서비스 상세 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
       <div>
-        <a href='/services' class='text-primary hover:underline text-sm mb-2 inline-block'>← 내 서비스</a>
-        <h1 class='text-3xl font-bold text-gray-900 dark:text-white' id='service-name'>서비스 상세</h1>
+        <a href="/services" class="text-primary hover:underline text-sm mb-2 inline-block">← 내 서비스</a>
+        <h1 class="text-3xl font-bold text-gray-900 dark:text-white" id="service-name">서비스 상세</h1>
       </div>
-      <div class='flex gap-3'>
-        <button id='suspend-btn' class='hidden bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-medium transition-colors'>일시정지</button>
-        <button id='resume-btn' class='hidden bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors'>재개</button>
-        <button id='cancel-btn' class='bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors'>취소</button>
+      <div class="flex gap-3">
+        <button id="suspend-btn" class="hidden bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">일시정지</button>
+        <button id="resume-btn" class="hidden bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">재개</button>
+        <button id="cancel-btn" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">취소</button>
       </div>
     </div>
 
-    <div class='grid gap-6 lg:grid-cols-3'>
-      <div class='lg:col-span-2 space-y-6'>
-        <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
-          <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800'>
-            <h2 class='text-lg font-semibold'>서비스 정보</h2>
+    <div class="grid gap-6 lg:grid-cols-3">
+      <div class="lg:col-span-2 space-y-6">
+        <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800">
+            <h2 class="text-lg font-semibold">서비스 정보</h2>
           </div>
-          <div class='p-6 space-y-4' id='service-info'>
-            <div class='flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800'>
-              <span class='text-gray-500'>상품</span>
-              <span class='font-medium' id='info-product'>-</span>
+          <div class="p-6 space-y-4" id="service-info">
+            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
+              <span class="text-gray-500">상품</span>
+              <span class="font-medium" id="info-product">-</span>
             </div>
-            <div class='flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800'>
-              <span class='text-gray-500'>상태</span>
-              <span class='font-medium' id='info-status'>-</span>
+            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
+              <span class="text-gray-500">상태</span>
+              <span class="font-medium" id="info-status">-</span>
             </div>
-            <div class='flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800'>
-              <span class='text-gray-500'>월 요금</span>
-              <span class='font-medium' id='info-price'>-</span>
+            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
+              <span class="text-gray-500">월 요금</span>
+              <span class="font-medium" id="info-price">-</span>
             </div>
-            <div class='flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800'>
-              <span class='text-gray-500'>다음 결제일</span>
-              <span class='font-medium' id='info-next-billing'>-</span>
+            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
+              <span class="text-gray-500">다음 결제일</span>
+              <span class="font-medium" id="info-next-billing">-</span>
             </div>
-            <div class='flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800'>
-              <span class='text-gray-500'>구독 ID</span>
-              <span class='font-mono text-sm' id='info-sub-id'>-</span>
+            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
+              <span class="text-gray-500">구독 ID</span>
+              <span class="font-mono text-sm" id="info-sub-id">-</span>
             </div>
-            <div class='flex items-center justify-between py-2'>
-              <span class='text-gray-500'>생성일</span>
-              <span class='font-medium' id='info-created'>-</span>
+            <div class="flex items-center justify-between py-2">
+              <span class="text-gray-500">생성일</span>
+              <span class="font-medium" id="info-created">-</span>
             </div>
           </div>
         </div>
 
-        <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
-          <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between'>
-            <h2 class='text-lg font-semibold'>최근 인보이스</h2>
+        <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">최근 인보이스</h2>
           </div>
-          <div class='p-6' id='service-invoices'>
-            <div class='text-center py-12 text-gray-500'>불러오는 중...</div>
+          <div class="p-6" id="service-invoices">
+            <div class="text-center py-12 text-gray-500">불러오는 중...</div>
           </div>
         </div>
       </div>
 
-      <div class='space-y-6'>
-        <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
-          <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800'>
-            <h2 class='text-lg font-semibold'>작업</h2>
+      <div class="space-y-6">
+        <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800">
+            <h2 class="text-lg font-semibold">작업</h2>
           </div>
-          <div class='p-6 space-y-4'>
-            <a href='/billing/portal' target='_blank' class='w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium text-center inline-block transition-colors'>결제 수단 관리 (Stripe 포털)</a>
-            <a href='/services' class='w-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white py-3 rounded-lg font-medium text-center inline-block transition-colors'>서비스 목록으로 돌아가기</a>
+          <div class="p-6 space-y-4">
+            <a href="/billing/portal" target="_blank" class="w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">결제 수단 관리 (Stripe 포털)</a>
+            <a href="/services" class="w-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">서비스 목록으로 돌아가기</a>
           </div>
         </div>
 
-        <div class='bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden'>
-          <div class='px-6 py-4 border-b border-gray-200 dark:border-slate-800'>
-            <h2 class='text-lg font-semibold'>위험 구역</h2>
+        <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800">
+            <h2 class="text-lg font-semibold">위험 구역</h2>
           </div>
-          <div class='p-6 space-y-4 text-sm text-gray-500 dark:text-gray-400'>
+          <div class="p-6 space-y-4 text-sm text-gray-500 dark:text-gray-400">
             <p>서비스를 취소하면 즉시 중단되며 데이터는 30일 후 영구 삭제됩니다.</p>
-            <p class='text-red-600 dark:text-red-400 font-medium'>이 작업은 되돌릴 수 없습니다.</p>
+            <p class="text-red-600 dark:text-red-400 font-medium">이 작업은 되돌릴 수 없습니다.</p>
           </div>
         </div>
       </div>
     </div>
   </div>
 
-  <script type='module'>
+  <script type="module">
     import { initServiceDetail } from '@/scripts/service-detail.ts';
-    initServiceDetail();
   </script>
 </Layout>
