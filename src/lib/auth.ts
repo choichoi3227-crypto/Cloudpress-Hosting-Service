@@ -1,5 +1,5 @@
 import { type D1Like, newId, nowIso } from "./db";
-import { hashPassword, verifyPassword, randomToken, sha256Hex, constantTimeEqual } from "./crypto";
+import { hashPassword, verifyPassword, PBKDF2_ITERATIONS, randomToken, sha256Hex, constantTimeEqual } from "./crypto";
 
 export const SESSION_COOKIE = "__Host-cp_session";
 export const SESSION_TTL_SEC = 7 * 24 * 3600;
@@ -35,7 +35,9 @@ export async function registerUser(db: D1Like, emailRaw: string, password: strin
 }
 
 // 사용자 없음/비밀번호 불일치를 시간·메시지로 구분할 수 없게 더미 해시를 검증한다.
-const dummyHash = await hashPassword("dummy-password-for-timing");
+// 주의: Workers 는 전역 스코프에서 crypto 비동기 연산/난수 생성이 금지되므로(오류 10021) 해시를 계산하지 않고
+// 형식이 유효한 고정 PBKDF2 문자열(100,000회)을 상수로 둔다. verifyPassword 는 동일한 반복 횟수로 실제 연산을 수행한다.
+const dummyHash = `pbkdf2$sha256$${PBKDF2_ITERATIONS}$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`;
 
 export type LoginResult = { ok: true; token: string; csrfToken: string; user: UserRow } | { ok: false; code: "invalid_credentials" | "suspended" };
 
