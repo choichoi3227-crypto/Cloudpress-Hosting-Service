@@ -1,0 +1,204 @@
+---
+import Layout from "../../layouts/Layout.astro";
+---
+
+<Layout title="옵저버빌리티 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">옵저버빌리티</h1>
+      <div class="flex gap-3">
+        <button id="refresh-btn" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">새로고침</button>
+      </div>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-4">
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">활성 알림</p>
+        <p class="text-3xl font-bold text-red-600 dark:text-red-400 mt-1" id="firing-alerts">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">해결된 알림 (24h)</p>
+        <p class="text-3xl font-bold text-green-600 dark:text-green-400 mt-1" id="resolved-alerts">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">SLO 달성률</p>
+        <p class="text-3xl font-bold text-primary mt-1" id="slo-compliance">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">에러 버짓 잔여</p>
+        <p class="text-3xl font-bold text-amber-600 dark:text-amber-400 mt-1" id="error-budget">-</p>
+      </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+      <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+          <h2 class="text-lg font-semibold">활성 알림</h2>
+          <button id="add-alert-btn" class="bg-primary hover:bg-blue-700 text-white px-3 py-1 rounded-lg text-sm font-medium transition-colors">+ 알림 규칙</button>
+        </div>
+        <div class="p-6" id="alerts-list">
+          <div class="text-center py-12 text-gray-500">불러오는 중...</div>
+        </div>
+      </div>
+
+      <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+          <h2 class="text-lg font-semibold">SLO 현황</h2>
+        </div>
+        <div class="p-6" id="slos-list">
+          <div class="text-center py-12 text-gray-500">불러오는 중...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">메트릭 쿼리</h2>
+      </div>
+      <div class="p-6">
+        <div class="grid gap-4 md:grid-cols-4 mb-4">
+          <input type="text" id="metric-name" placeholder="메트릭 이름 (예: http_requests_total)" class="px-4 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800">
+          <select id="metric-aggregation" class="px-4 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800">
+            <option value="avg">평균</option>
+            <option value="sum">합계</option>
+            <option value="min">최소</option>
+            <option value="max">최대</option>
+            <option value="count">개수</option>
+          </select>
+          <input type="number" id="metric-window" placeholder="시간 범위 (분)" value="60" class="px-4 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800">
+          <button id="query-metric-btn" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium">조회</button>
+        </div>
+        <div id="metric-result" class="font-mono text-sm bg-gray-100 dark:bg-slate-800 p-4 rounded-lg min-h-[100px]"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    async function loadObservability() {
+      try {
+        const [alertsRes, slosRes] = await Promise.all([
+          fetch("/api/observability/alerts", { credentials: "include" }),
+          fetch("/api/observability/slos", { credentials: "include" })
+        ]);
+        
+        if (alertsRes.ok) {
+          const data = await alertsRes.json();
+          renderAlerts(data.alerts || []);
+          document.getElementById("firing-alerts")!.textContent = (data.alerts || []).filter(a => a.status === "firing").length.toString();
+          document.getElementById("resolved-alerts")!.textContent = (data.alerts || []).filter(a => a.status === "resolved").length.toString();
+        }
+        
+        if (slosRes.ok) {
+          const data = await slosRes.json();
+          renderSLOs(data.slos || []);
+          if (data.slos?.length > 0) {
+            const met = data.slos.filter(s => s.met).length;
+            document.getElementById("slo-compliance")!.textContent = (met / data.slos.length * 100).toFixed(1) + "%";
+            const avgBudget = data.slos.reduce((sum, s) => sum + s.errorBudgetRemaining, 0) / data.slos.length;
+            document.getElementById("error-budget")!.textContent = avgBudget.toFixed(1) + "%";
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderAlerts(alerts) {
+      const container = document.getElementById("alerts-list");
+      if (alerts.length === 0) {
+        container.innerHTML = '<div class="text-center py-12 text-gray-500">활성 알림이 없습니다.</div>';
+        return;
+      }
+      container.innerHTML = alerts.map(a => `
+        <div class="p-4 border border-gray-200 dark:border-slate-700 rounded-lg mb-3 flex items-center justify-between">
+          <div>
+            <p class="font-medium">${a.alertName || a.alertId.slice(0,8)}</p>
+            <p class="text-sm text-gray-500">${a.metricName} ${a.severity}</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="px-2 py-1 text-xs font-medium rounded-full ${a.status === "firing" ? "bg-red-100 text-red-800" : "bg-gray-100 text-gray-800"}">${a.status}</span>
+            <span class="font-mono">값: ${a.value?.toFixed(2) || "-"}</span>
+            ${a.status === "firing" ? '<button class="text-sm text-blue-600 hover:underline" data-action="ack" data-id="' + a.id + '">확인</button>' : ""}
+          </div>
+        </div>
+      `).join("");
+
+      document.querySelectorAll("#alerts-list button[data-action=ack]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const res = await fetch("/api/observability/alerts/" + btn.dataset.id + "/ack", {
+            method: "POST",
+            headers: { "X-CSRF-Token": (window as any).csrfToken },
+            credentials: "include"
+          });
+          if (res.ok) loadObservability();
+        });
+      });
+    }
+
+    function renderSLOs(slos) {
+      const container = document.getElementById("slos-list");
+      if (slos.length === 0) {
+        container.innerHTML = '<div class="text-center py-12 text-gray-500">SLO가 설정되지 않았습니다.</div>';
+        return;
+      }
+      container.innerHTML = slos.map(s => `
+        <div class="p-4 border border-gray-200 dark:border-slate-700 rounded-lg mb-3">
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <p class="font-medium">${s.name}</p>
+              <p class="text-sm text-gray-500">${s.service} • ${s.window}</p>
+            </div>
+            <span class="px-2 py-1 text-xs font-medium rounded-full ${s.met ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}">
+              ${s.met ? "달성" : "미달성"}
+            </span>
+          </div>
+          <div class="flex items-center gap-4 text-sm">
+            <span>현재: <strong>${s.current.toFixed(2)}%</strong></span>
+            <span>목표: <strong>${s.target}%</strong></span>
+            <span>에러 버짓: <strong>${s.errorBudgetRemaining.toFixed(1)}%</strong></span>
+            <div class="flex-1 h-2 bg-gray-200 dark:bg-slate-700 rounded overflow-hidden ml-4">
+              <div class="h-full bg-primary rounded" style="width: ${Math.min(100, s.current / s.target * 100)}%"></div>
+            </div>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    document.getElementById("refresh-btn")?.addEventListener("click", loadObservability);
+    document.getElementById("add-alert-btn")?.addEventListener("click", () => {
+      const name = prompt("알림 이름:");
+      const metric = prompt("메트릭 이름:");
+      const threshold = parseFloat(prompt("임계값:"));
+      if (name && metric && !isNaN(threshold)) {
+        fetch("/api/observability/alerts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": (window as any).csrfToken },
+          credentials: "include",
+          body: JSON.stringify({ name, metricName: metric, condition: { operator: "gt", threshold, durationSec: 300 }, severity: "warning", enabled: true, notificationChannels: [] })
+        }).then(() => loadObservability());
+      }
+    });
+
+    document.getElementById("query-metric-btn")?.addEventListener("click", async () => {
+      const name = (document.getElementById("metric-name") as HTMLInputElement).value;
+      const agg = (document.getElementById("metric-aggregation") as HTMLSelectElement).value;
+      const window = parseInt((document.getElementById("metric-window") as HTMLInputElement).value);
+      if (!name) return;
+      
+      try {
+        const res = await fetch("/api/observability/metrics/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": (window as any).csrfToken },
+          credentials: "include",
+          body: JSON.stringify({ name, aggregation: agg, fromMs: Date.now() - window * 60 * 1000, toMs: Date.now() })
+        });
+        const data = await res.json();
+        document.getElementById("metric-result")!.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        document.getElementById("metric-result")!.textContent = "오류: " + e.message;
+      }
+    });
+
+    loadObservability();
+  </script>
+</Layout>

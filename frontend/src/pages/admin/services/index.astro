@@ -1,0 +1,79 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+---
+
+<Layout title="관리자 - 서비스 관리 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">서비스 관리</h1>
+      <a href="/admin" class="text-primary hover:underline">← 관리자 대시보드</a>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">구독 목록</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead class="bg-gray-50 dark:bg-slate-800/50">
+            <tr class="text-left text-sm text-gray-500 dark:text-gray-400">
+              <th class="px-6 py-3">ID</th>
+              <th class="px-6 py-3">고객</th>
+              <th class="px-6 py-3">상품</th>
+              <th class="px-6 py-3">상태</th>
+              <th class="px-6 py-3">주기</th>
+              <th class="px-6 py-3">다음 결제</th>
+              <th class="px-6 py-3">액션</th>
+            </tr>
+          </thead>
+          <tbody id="subs-table" class="divide-y divide-gray-200 dark:divide-slate-800">
+            <tr><td colspan="7" class="px-6 py-12 text-center text-gray-500">불러오는 중...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    async function loadSubscriptions() {
+      try {
+        const res = await fetch("/api/admin/subscriptions", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          renderSubscriptions(data.subscriptions || []);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderSubscriptions(subs) {
+      const tbody = document.getElementById("subs-table");
+      if (subs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-12 text-center text-gray-500">구독이 없습니다.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = subs.map(s => `
+        <tr class="hover:bg-gray-50 dark:hover:bg-slate-800/50">
+          <td class="px-6 py-4 font-mono text-sm">${s.id.slice(0,12)}...</td>
+          <td class="px-6 py-4">${s.customer_email}</td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-1 text-xs font-medium rounded-full bg-primary/10 text-primary">${s.product_kind}</span>
+          </td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-1 text-xs font-medium rounded-full ${s.status === "active" ? "bg-green-100 text-green-800" : s.status === "past_due" ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-800"}">${s.status}</span>
+          </td>
+          <td class="px-6 py-4">${s.billing_interval}</td>
+          <td class="px-6 py-4">${s.current_period_end ? new Date(s.current_period_end).toLocaleDateString("ko-KR") : "-"}</td>
+          <td class="px-6 py-4">
+            <button class="action-btn text-primary hover:underline text-sm" data-action="view" data-id="${s.id}">상세</button>
+            <button class="action-btn text-amber-600 hover:underline text-sm ml-2" data-action="suspend" data-id="${s.id}">일시정지</button>
+            <button class="action-btn text-red-600 hover:underline text-sm ml-2" data-action="cancel" data-id="${s.id}">취소</button>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    loadSubscriptions();
+  </script>
+</Layout>

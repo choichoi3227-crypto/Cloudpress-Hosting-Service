@@ -1,0 +1,119 @@
+---
+import Layout from "../../../layouts/Layout.astro";
+---
+
+<Layout title="관리자 - 시스템 상태 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">시스템 상태</h1>
+      <a href="/admin" class="text-primary hover:underline">← 관리자 대시보드</a>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-4">
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">API 응답시간 (p99)</p>
+        <p class="text-3xl font-bold text-primary mt-1" id="api-p99">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">큐 대기 작업</p>
+        <p class="text-3xl font-bold text-amber-600 dark:text-amber-400 mt-1" id="queue-pending">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">D1 연결</p>
+        <p class="text-3xl font-bold text-green-600 dark:text-green-400 mt-1" id="d1-status">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">활성 컨테이너</p>
+        <p class="text-3xl font-bold text-blue-600 dark:text-blue-400 mt-1" id="active-containers">-</p>
+      </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+      <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+          <h2 class="text-lg font-semibold">최근 에러</h2>
+        </div>
+        <div class="p-6" id="errors-list">
+          <div class="text-center py-12 text-gray-500">불러오는 중...</div>
+        </div>
+      </div>
+
+      <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+          <h2 class="text-lg font-semibold">큐 상태</h2>
+        </div>
+        <div class="p-6" id="queues-list">
+          <div class="text-center py-12 text-gray-500">불러오는 중...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">워커 상태</h2>
+        <button id="refresh-btn" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">새로고침</button>
+      </div>
+      <div class="p-6" id="workers-list">
+        <div class="text-center py-12 text-gray-500">불러오는 중...</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    async function loadSystem() {
+      try {
+        const res = await fetch("/api/admin/system", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          renderSystem(data);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderSystem(data) {
+      document.getElementById("api-p99")!.textContent = data.apiP99 + "ms";
+      document.getElementById("queue-pending")!.textContent = data.queuePending.toString();
+      document.getElementById("d1-status")!.textContent = data.d1Healthy ? "정상" : "장애";
+      document.getElementById("active-containers")!.textContent = data.activeContainers.toString();
+
+      const errorsContainer = document.getElementById("errors-list");
+      if ((data.recentErrors || []).length === 0) {
+        errorsContainer.innerHTML = '<div class="text-center py-12 text-gray-500">최근 에러가 없습니다.</div>';
+      } else {
+        errorsContainer.innerHTML = (data.recentErrors || []).map(e => `
+          <div class="p-4 border border-red-200 dark:border-red-900/50 rounded-lg mb-3 bg-red-50 dark:bg-red-900/20">
+            <p class="font-mono text-sm text-red-800 dark:text-red-200">${e.message}</p>
+            <p class="text-xs text-gray-500 mt-1">${e.timestamp} • ${e.endpoint}</p>
+          </div>
+        `).join("");
+      }
+
+      const queuesContainer = document.getElementById("queues-list");
+      queuesContainer.innerHTML = (data.queues || []).map(q => `
+        <div class="p-4 border border-gray-200 dark:border-slate-700 rounded-lg mb-3">
+          <div class="flex items-center justify-between">
+            <p class="font-medium">${q.name}</p>
+            <span class="px-2 py-1 text-xs font-medium rounded-full ${q.status === "healthy" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}">${q.status}</span>
+          </div>
+          <p class="text-sm text-gray-500 mt-1">대기: ${q.pending} • 처리중: ${q.processing} • 완료: ${q.completed} • 실패: ${q.failed}</p>
+        </div>
+      `).join("");
+
+      const workersContainer = document.getElementById("workers-list");
+      workersContainer.innerHTML = (data.workers || []).map(w => `
+        <div class="p-4 border border-gray-200 dark:border-slate-700 rounded-lg mb-3">
+          <div class="flex items-center justify-between">
+            <p class="font-medium">${w.name}</p>
+            <span class="px-2 py-1 text-xs font-medium rounded-full ${w.status === "healthy" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}">${w.status}</span>
+          </div>
+          <p class="text-sm text-gray-500 mt-1">CPU: ${w.cpuUsage}% • 메모리: ${w.memoryUsage}% • 요청: ${w.requestsPerSec}/초</p>
+        </div>
+      `).join("");
+    }
+
+    document.getElementById("refresh-btn")?.addEventListener("click", loadSystem);
+    loadSystem();
+  </script>
+</Layout>
