@@ -12,24 +12,114 @@
   },
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": { "APP_ORIGIN": "https://cloud-press.co.kr", "CLOUDPRESS_MODE": "live" },
-  "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-production", "migrations_dir": "migrations" }],
-  "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-production" }], "consumers": [{ "queue": "cloudpress-jobs-production", "max_batch_size": 10, "max_batch_timeout": 5 }] },
-  "triggers": { "crons": ["*/5 * * * *"] },
+  
+  // Observability 로그 수집 및 추적 활성화 설정 추가
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+
+  "vars": {
+    "APP_ORIGIN": "https://cloud-press.co.kr",
+    "CLOUDPRESS_MODE": "live"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cloudpress-production",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "JOBS",
+        "queue": "cloudpress-jobs-production"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "cloudpress-jobs-production",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "env": {
     "staging": {
       "name": "cloudpress-api-staging",
-      "vars": { "APP_ORIGIN": "https://staging.cloud-press.co.kr", "CLOUDPRESS_MODE": "live" },
-      "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-staging", "migrations_dir": "migrations" }],
-      "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-staging" }], "consumers": [{ "queue": "cloudpress-jobs-staging", "max_batch_size": 10, "max_batch_timeout": 5 }] },
-      "triggers": { "crons": ["*/5 * * * *"] }
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      },
+      "vars": {
+        "APP_ORIGIN": "https://staging.cloud-press.co.kr",
+        "CLOUDPRESS_MODE": "live"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cloudpress-staging",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "JOBS",
+            "queue": "cloudpress-jobs-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "cloudpress-jobs-staging",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
+        ]
+      },
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      }
     },
     "production": {
       "name": "cloudpress-api",
-      "vars": { "APP_ORIGIN": "https://cloud-press.co.kr", "CLOUDPRESS_MODE": "live" },
-      "d1_databases": [{ "binding": "DB", "database_name": "cloudpress-production", "migrations_dir": "migrations" }],
-      "queues": { "producers": [{ "binding": "JOBS", "queue": "cloudpress-jobs-production" }], "consumers": [{ "queue": "cloudpress-jobs-production", "max_batch_size": 10, "max_batch_timeout": 5 }] },
-      "triggers": { "crons": ["*/5 * * * *"] }
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      },
+      "vars": {
+        "APP_ORIGIN": "https://cloud-press.co.kr",
+        "CLOUDPRESS_MODE": "live"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cloudpress-production",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "JOBS",
+            "queue": "cloudpress-jobs-production"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "cloudpress-jobs-production",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5
+          }
+        ]
+      },
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      }
     }
   }
 }
