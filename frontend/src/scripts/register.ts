@@ -4,9 +4,14 @@ export function initRegister(): void {
   const form = document.getElementById('register-form') as HTMLFormElement;
   const emailInput = document.getElementById('email') as HTMLInputElement;
   const passwordInput = document.getElementById('password') as HTMLInputElement;
-  const confirmInput = document.getElementById('password-confirm') as HTMLInputElement;
-  const btn = document.getElementById('register-btn') as HTMLButtonElement;
-  const errorDiv = document.getElementById('register-error') as HTMLDivElement;
+  // HTML 마크업의 실제 ID인 'confirm-password'에 맞게 수정
+  const confirmInput = document.getElementById('confirm-password') as HTMLInputElement;
+  const btn = document.querySelector('button[type="submit"]') as HTMLButtonElement;
+  const errorDiv = document.getElementById('error-message') as HTMLDivElement;
+
+  if (!form || !emailInput || !passwordInput || !confirmInput) {
+    return; // 필수 요소가 없으면 실행 중지 (다른 페이지에서의 에러 방지)
+  }
 
   function showError(input: HTMLInputElement, message: string) {
     const errorEl = document.getElementById(`${input.id}-error`) as HTMLParagraphElement;
@@ -48,23 +53,38 @@ export function initRegister(): void {
   });
 
   [emailInput, passwordInput, confirmInput].forEach(input => {
-    input.addEventListener('input', () => clearError(input));
+    if (input) {
+      input.addEventListener('input', () => clearError(input));
+    }
   });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    errorDiv.classList.add('hidden');
+    if (errorDiv) {
+      errorDiv.classList.add('hidden');
+    }
 
     const emailValid = validateEmail(emailInput.value);
     const passwordValid = validatePassword(passwordInput.value);
     const passwordsMatch = passwordInput.value === confirmInput.value;
 
-    if (!emailValid.valid) { showError(emailInput, emailValid.message); return; }
-    if (!passwordValid.valid) { showError(passwordInput, passwordValid.message); return; }
-    if (!passwordsMatch) { showError(confirmInput, '비밀번호가 일치하지 않습니다.'); return; }
+    if (!emailValid.valid) {
+      showError(emailInput, emailValid.message);
+      return;
+    }
+    if (!passwordValid.valid) {
+      showError(passwordInput, passwordValid.message);
+      return;
+    }
+    if (!passwordsMatch) {
+      showError(confirmInput, '비밀번호가 일치하지 않습니다.');
+      return;
+    }
 
-    btn.disabled = true;
-    btn.textContent = '가입 중...';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '가입 중...';
+    }
 
     try {
       const res = await fetch('/api/auth/register', {
@@ -74,43 +94,35 @@ export function initRegister(): void {
         body: JSON.stringify({ email: emailInput.value, password: passwordInput.value })
       });
 
-      const data = await res.json();
+      const data = await res.json() as { message?: string; error?: string };
+
       if (res.ok) {
         alert('회원가입이 완료되었습니다. 로그인 페이지로 이동합니다.');
         window.location.href = '/login';
       } else {
-        errorDiv.textContent = data.message || data.error || '회원가입 실패';
-        errorDiv.classList.remove('hidden');
+        if (errorDiv) {
+          errorDiv.textContent = data.message || data.error || '회원가입 실패';
+          errorDiv.classList.remove('hidden');
+        }
       }
     } catch {
-      errorDiv.textContent = '네트워크 오류가 발생했습니다.';
-      errorDiv.classList.remove('hidden');
+      if (errorDiv) {
+        errorDiv.textContent = '네트워크 오류가 발생했습니다.';
+        errorDiv.classList.remove('hidden');
+      }
     } finally {
-      btn.disabled = false;
-      btn.textContent = '가입하기';
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '가입하기';
+      }
     }
   });
-
-  function showError(input: HTMLInputElement, message: string) {
-    const errorEl = document.getElementById(`${input.id}-error`) as HTMLParagraphElement;
-    if (errorEl) {
-      errorEl.textContent = message;
-      errorEl.classList.remove('hidden');
-    }
-    input.classList.add('border-red-500', 'focus:ring-red-500');
-    input.classList.remove('border-gray-300', 'dark:border-slate-700');
-  }
-
-  function clearError(input: HTMLInputElement) {
-    const errorEl = document.getElementById(`${input.id}-error`) as HTMLParagraphElement;
-    if (errorEl) {
-      errorEl.classList.add('hidden');
-    }
-    input.classList.remove('border-red-500', 'focus:ring-red-500');
-    input.classList.add('border-gray-300', 'dark:border-slate-700');
-  }
 }
 
 if (typeof window !== 'undefined') {
-  document.addEventListener('DOMContentLoaded', initRegister);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initRegister);
+  } else {
+    initRegister();
+  }
 }
