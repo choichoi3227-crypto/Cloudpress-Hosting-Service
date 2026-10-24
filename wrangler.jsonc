@@ -25,7 +25,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "cloudpress-production",
+      "database_name": "cloudpress-dev",
       "migrations_dir": "migrations"
     }
   ],
