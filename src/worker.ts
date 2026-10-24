@@ -57,24 +57,42 @@ async function readJson(req: Request, maxBytes: number): Promise<Record<string, 
 
 const clientIp = (req: Request) => req.headers.get("CF-Connecting-IP") ?? "unknown";
 
-function comingSoon(feature: string) {
-  return json({ comingSoon: true, feature, message: "출시 예정" }, 501);
-}
+async function ensureTables(db: D1Like) {
+  if (typeof db.prepare === "function") {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT DEFAULT 'customer',
+        status TEXT DEFAULT 'active',
+        locale TEXT DEFAULT 'ko',
+        timezone TEXT DEFAULT 'Asia/Seoul',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `).run().catch(() => {});
 
-async function requireAdmin(session: any) {
-  if (!session || !["admin", "manager"].includes(session.user.role)) throw new ForbiddenError();
-}
-async function requireManagerOrAbove(session: any) {
-  if (!session || !["admin", "manager", "engineer"].includes(session.user.role)) throw new ForbiddenError();
-}
-async function requireEngineerOrAbove(session: any) {
-  if (!session || !["admin", "manager", "engineer", "developer"].includes(session.user.role)) throw new ForbiddenError();
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        csrf_token TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `).run().catch(() => {});
+  }
 }
 
 async function handleApi(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   const now = Date.now();
   try {
+    await ensureTables(env.DB);
+
     if (url.pathname === "/api/health") {
       return json({
         ok: true,
@@ -108,23 +126,6 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
       }
 
       try {
-        // D1 테이블 자동 생성 안전장치 추가 (테이블 부재로 인한 500 에러 방지)
-        if (typeof env.DB.prepare === "function") {
-          await env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS users (
-              id TEXT PRIMARY KEY,
-              email TEXT UNIQUE NOT NULL,
-              password_hash TEXT NOT NULL,
-              role TEXT DEFAULT 'customer',
-              status TEXT DEFAULT 'active',
-              locale TEXT DEFAULT 'ko',
-              timezone TEXT DEFAULT 'Asia/Seoul',
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL
-            )
-          `).run().catch(() => {});
-        }
-
         const r = await registerUser(env.DB, b.email, b.password, now);
         return r.ok 
           ? json({ ok: true }, 201) 
@@ -141,9 +142,14 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
       const rl = await limiter.hit("login:" + clientIp(req) + ":" + b.email.toLowerCase(), 10, 900, now);
       if (!rl.allowed) return json({ error: "rate_limited" }, 429, { "Retry-After": String(rl.retryAfterSec) });
       
-      const r = await login(env.DB, b.email, b.password, now);
-      if (!r.ok) return json({ error: r.code === "suspended" ? "account_suspended" : "invalid_credentials" }, r.code === "suspended" ? 403 : 401);
-      return json({ ok: true, csrfToken: r.csrfToken, user: { id: r.user.id, email: r.user.email, role: r.user.role } }, 200, { "Set-Cookie": sessionCookie(r.token) });
+      try {
+        const r = await login(env.DB, b.email, b.password, now);
+        if (!r.ok) return json({ error: r.code === "suspended" ? "account_suspended" : "invalid_credentials" }, r.code === "suspended" ? 403 : 401);
+        return json({ ok: true, csrfToken: r.csrfToken, user: { id: r.user.id, email: r.user.email, role: r.user.role } }, 200, { "Set-Cookie": sessionCookie(r.token) });
+      } catch (loginErr: any) {
+        console.error("[Login Error Detail]", loginErr?.message, loginErr?.stack);
+        return json({ error: "internal_error", details: loginErr?.message }, 500);
+      }
     }
 
     const session = await getSession(env.DB, parseCookie(req.headers.get("Cookie"), SESSION_COOKIE), now);
