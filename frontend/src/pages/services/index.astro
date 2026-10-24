@@ -26,7 +26,45 @@ import Layout from '@/layouts/Layout.astro';
     </div>
   </div>
 
-  <script type="module">
-    import { loadServices } from '@/scripts/services.ts';
+  <script>
+    // 외부 .ts 모듈 직접 임포트 대신 브라우저가 바로 실행할 수 있는 인라인 스크립트로 처리
+    async function loadServices() {
+      const listContainer = document.getElementById('services-list');
+      const emptyState = document.getElementById('empty-state');
+
+      try {
+        const res = await fetch('/api/services', { credentials: 'include' });
+        if (res.ok) {
+          const services = await res.json();
+          if (!services || services.length === 0) {
+            if (listContainer) listContainer.style.display = 'none';
+            if (emptyState) emptyState.classList.remove('hidden');
+            return;
+          }
+
+          if (listContainer) {
+            listContainer.innerHTML = `
+              <div class="grid gap-4">
+                ${services.map((s: any) => `
+                  <div class="p-4 border border-gray-200 dark:border-slate-800 rounded-lg flex items-center justify-between">
+                    <div>
+                      <a href="/services/${s.id}" class="font-semibold text-lg hover:text-primary transition-colors">${s.name || s.id}</a>
+                      <p class="text-sm text-gray-500">타입: ${s.productKind || '기본'} | 상태: <span class="text-green-500 font-medium">${s.status || '활성'}</span></p>
+                    </div>
+                    <a href="/services/${s.id}" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-sm rounded-lg font-medium transition-colors">관리</a>
+                  </div>
+                `).join('')}
+              </div>
+            `;
+          }
+        } else {
+          if (listContainer) listContainer.innerHTML = '<div class="text-center py-12 text-red-500">서비스 목록을 불러오지 못했습니다.</div>';
+        }
+      } catch (err) {
+        if (listContainer) listContainer.innerHTML = '<div class="text-center py-12 text-red-500">서버 통신 중 오류가 발생했습니다.</div>';
+      }
+    }
+
+    loadServices();
   </script>
 </Layout>
