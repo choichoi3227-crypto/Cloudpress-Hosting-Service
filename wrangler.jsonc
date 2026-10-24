@@ -1,5 +1,5 @@
 {
-  "name": "cloudpress-api-dev",
+  "name": "cloudpress-hosting-service",
   "main": "src/worker.ts",
   "build": {
     "command": "cd frontend && npm install && npm run build",
