@@ -35,15 +35,14 @@ export async function registerUser(db: D1Like, emailRaw: string, password: strin
 }
 
 // 사용자 없음/비밀번호 불일치를 시간·메시지로 구분할 수 없게 더미 해시를 검증한다.
-let dummyHash: Promise<string> | undefined;
+const dummyHash = await hashPassword("dummy-password-for-timing");
 
 export type LoginResult = { ok: true; token: string; csrfToken: string; user: UserRow } | { ok: false; code: "invalid_credentials" | "suspended" };
 
 export async function login(db: D1Like, emailRaw: string, password: string, nowMs: number): Promise<LoginResult> {
   const email = normalizeEmail(emailRaw) ?? "";
   const row = await db.prepare("SELECT id,email,role,status,password_hash FROM users WHERE email = ?").bind(email).first<UserRow & { password_hash: string }>();
-  dummyHash ??= hashPassword("dummy-password-for-timing");
-  const ok = await verifyPassword(password, row?.password_hash ?? (await dummyHash));
+  const ok = await verifyPassword(password, row?.password_hash ?? dummyHash);
   if (!row || !ok) {
     await audit(db, { actorId: row?.id ?? null, action: "user.login_failed", targetType: "user", targetId: row?.id ?? null }, nowMs);
     return { ok: false, code: "invalid_credentials" };
@@ -116,7 +115,8 @@ export async function audit(db: D1Like, e: { actorId: string | null; action: str
 
 /** 고객 간 격리: 자원 소유자가 요청자와 다르면 존재 여부도 숨기기 위해 null 처럼 취급. */
 export async function ownedBy(db: D1Like, table: "containers" | "databases" | "storage_buckets" | "worker_services" | "domains" | "subscriptions", id: string, userId: string): Promise<boolean> {
-  // table 은 타입으로 고정된 화이트리스트이므로 SQL 삽입 위험이 없다.
+  const allowedTables = ["containers", "databases", "storage_buckets", "worker_services", "domains", "subscriptions"];
+  if (!allowedTables.includes(table)) throw new Error("invalid_table_name");
   const r = await db.prepare(`SELECT 1 AS ok FROM ${table} WHERE id = ? AND customer_id = ?`).bind(id, userId).first();
   return r !== null;
 }
