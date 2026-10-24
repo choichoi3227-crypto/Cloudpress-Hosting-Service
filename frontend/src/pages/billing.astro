@@ -38,8 +38,11 @@ import Layout from '../layouts/Layout.astro';
     </div>
   </div>
 
-  <script type="module">
+  <script>
     import { loadBilling } from '../scripts/billing.ts';
-    loadBilling();
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      loadBilling();
+    });
   </script>
 </Layout>
