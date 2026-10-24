@@ -37,7 +37,7 @@ export interface ProvisionParams {
   imageId: string;
   schedulingPolicy: "default" | "durable_object";
   enableInternet: boolean;
-  interceptTargets: { host: string; port: number }[];  // 백업용 내부 엔드포인트
+  interceptTargets: { host: string; port: number }[];
   env: Record<string, string>;
   labels: Record<string, string>;
   sleepPolicy: "idle" | "never";
@@ -123,10 +123,10 @@ export class MockContainerManager implements ContainerManager {
   private backupJobs = new Map<string, { id: string; status: string }[]>();
   
   async provision(params: ProvisionParams): Promise<ProvisionResult> {
-    const cfInstanceId = \cf_\_\\;
-    const ip = \10.\.\.\\;
+    const cfInstanceId = "cf_" + newId("inst");
+    const ip = "10." + Math.floor(Math.random()*255) + "." + Math.floor(Math.random()*255) + "." + Math.floor(Math.random()*255);
     const port = 8080 + Math.floor(Math.random() * 1000);
-    const durableObjectId = params.schedulingPolicy === "durable_object" ? \do_\\ : undefined;
+    const durableObjectId = params.schedulingPolicy === "durable_object" ? "do_" + newId("do") : undefined;
     
     this.instances.set(params.containerId, {
       cfInstanceId,
@@ -155,7 +155,7 @@ export class MockContainerManager implements ContainerManager {
   async resize(containerId: string, newInstanceType: InstanceType): Promise<void> {
     const inst = this.instances.get(containerId);
     if (inst) {
-      inst.state = "running"; // 모의: 즉시 적용
+      inst.state = "running";
     }
   }
   
@@ -172,7 +172,7 @@ export class MockContainerManager implements ContainerManager {
     if (!inst) throw new Error("container_not_found");
     if (inst.schedulingPolicy !== "durable_object") throw new Error("snapshots_not_supported");
     
-    const handle = \snap_\_\\;
+    const handle = "snap_" + newId("snap");
     const sizeBytes = Math.floor(Math.random() * 1024 * 1024 * 500) + 10 * 1024 * 1024;
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     
@@ -190,7 +190,7 @@ export class MockContainerManager implements ContainerManager {
   }
   
   async triggerBackup(containerId: string, kind: "full" | "incremental" | "binlog"): Promise<string> {
-    const jobId = \ackup_\_\_\\;
+    const jobId = "backup_" + newId("job");
     const arr = this.backupJobs.get(containerId) ?? [];
     arr.push({ id: jobId, status: "completed" });
     this.backupJobs.set(containerId, arr);
@@ -232,7 +232,7 @@ export class LiveContainerManager implements ContainerManager {
   
   async provision(params: ProvisionParams): Promise<ProvisionResult> {
     const image = await this.getImage(params.imageId);
-    if (!image) throw new Error(\image_not_found: \\);
+    if (!image) throw new Error("image_not_found: " + params.imageId);
     
     if (params.schedulingPolicy === "durable_object") {
       const result = await this.client.startContainer({
@@ -246,10 +246,7 @@ export class LiveContainerManager implements ContainerManager {
         interceptOutboundHttp: { targets: params.interceptTargets },
       });
       
-      await this.db.prepare(
-        \INSERT INTO container_instances (id, container_id, image_id, cf_instance_id, scheduling_policy, state, ip, port, enable_internet, intercept_targets_json, labels_json, started_at)
-         VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)\
-      ).bind(
+      await this.db.prepare("INSERT INTO container_instances (id, container_id, image_id, cf_instance_id, scheduling_policy, state, ip, port, enable_internet, intercept_targets_json, labels_json, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)").bind(
         newId("cinst"),
         params.containerId,
         params.imageId,
@@ -271,10 +268,7 @@ export class LiveContainerManager implements ContainerManager {
         image: image.docker_image,
       });
       
-      await this.db.prepare(
-        \INSERT INTO container_instances (id, container_id, image_id, cf_instance_id, scheduling_policy, state, ip, port, started_at)
-         VALUES (?, ?, ?, ?, 'default', 'running', ?, ?, ?)\
-      ).bind(
+      await this.db.prepare("INSERT INTO container_instances (id, container_id, image_id, cf_instance_id, scheduling_policy, state, ip, port, started_at) VALUES (?, ?, ?, ?, 'default', 'running', ?, ?, ?)").bind(
         newId("cinst"),
         params.containerId,
         params.imageId,
@@ -347,10 +341,7 @@ export class LiveContainerManager implements ContainerManager {
     
     const result = await this.client.createSnapshot(inst.cf_instance_id);
     const snapId = newId("snap");
-    await this.db.prepare(
-      \INSERT INTO snapshots (id, container_id, image_id, cf_snapshot_handle, size_bytes, state, expires_at)
-       VALUES (?, ?, ?, ?, ?, 'ready', ?)\
-    ).bind(snapId, containerId, inst.image_id, result.handle, result.sizeBytes, result.expiresAt).run();
+    await this.db.prepare("INSERT INTO snapshots (id, container_id, image_id, cf_snapshot_handle, size_bytes, state, expires_at) VALUES (?, ?, ?, ?, ?, 'ready', ?)").bind(snapId, containerId, inst.image_id, result.handle, result.sizeBytes, result.expiresAt).run();
     
     await this.db.prepare("UPDATE containers SET last_snapshot_id=? WHERE id=?").bind(result.handle, containerId).run();
     
@@ -372,17 +363,11 @@ export class LiveContainerManager implements ContainerManager {
   async triggerBackup(containerId: string, kind: "full" | "incremental" | "binlog"): Promise<string> {
     // 백업 작업 큐에 등록 (실제 백업은 별도 워커/큐 소비자에서 수행)
     const jobId = newId("bjob");
-    const idempotencyKey = \ackup:\:\:\\;
-    await this.db.prepare(
-      \INSERT INTO backup_jobs (id, container_id, kind, status, r2_prefix, encryption_key_id, idempotency_key)
-       VALUES (?, ?, ?, 'queued', ?, (SELECT id FROM container_encryption_keys WHERE container_id = ? ORDER BY key_version DESC LIMIT 1), ?)\
-    ).bind(jobId, containerId, kind, \ackups/\/\/\/\, containerId, idempotencyKey).run();
+    const idempotencyKey = "backup:" + containerId + ":" + kind + ":" + Date.now();
+    await this.db.prepare("INSERT INTO backup_jobs (id, container_id, kind, status, r2_prefix, encryption_key_id, idempotency_key) VALUES (?, ?, ?, 'queued', ?, (SELECT id FROM container_encryption_keys WHERE container_id = ? ORDER BY key_version DESC LIMIT 1), ?)").bind(jobId, containerId, kind, "backups/" + containerId + "/", containerId, idempotencyKey).run();
     
     // container_jobs에도 기록
-    await this.db.prepare(
-      \INSERT INTO container_jobs (id, container_id, kind, payload_json, state, idempotency_key)
-       VALUES (?, ?, ?, ?, 'queued', ?)\
-    ).bind(newId("cjob"), containerId, \ackup_\\, JSON.stringify({ backupJobId: jobId }), idempotencyKey).run();
+    await this.db.prepare("INSERT INTO container_jobs (id, container_id, kind, payload_json, state, idempotency_key) VALUES (?, ?, ?, ?, 'queued', ?)").bind(newId("cjob"), containerId, "backup_" + kind, JSON.stringify({ backupJobId: jobId }), idempotencyKey).run();
     
     return jobId;
   }
@@ -422,11 +407,11 @@ export function getSchedulingPolicy(instanceType: InstanceType): "default" | "du
 /** 이미지 ID 자동 결정(상품 종류 + 인스턴스 타입) */
 export function resolveImageId(productKind: ProductKind, instanceType: InstanceType): string {
   const map: Record<string, string> = {
-    "ccs": \img-ccs-\\,
-    "cloudb": instanceType === "basic" ? \img-cloudb-mariadb\ : \img-ccs-\\,
-    "wordpress": \img-wp-\\,
+    "ccs": "img-ccs-" + instanceType,
+    "cloudb": instanceType === "basic" ? "img-cloudb-mariadb" : "img-ccs-" + instanceType,
+    "wordpress": "img-wp-" + instanceType,
   };
-  return map[\\-\\] ?? \img-ccs-\\;
+  return map[productKind] ?? "img-ccs-" + instanceType;
 }
 
 /** 컨테이너 매니저 팩토리 */
