@@ -11,7 +11,7 @@ const { id } = Astro.params;
 ---
 
 <Layout title="서비스 상세 - CloudPress">
-  <div class="space-y-8">
+  <div class="space-y-8" data-service-id={id}>
     <div class="flex items-center justify-between">
       <div>
         <a href="/services" class="text-primary hover:underline text-sm mb-2 inline-block">← 내 서비스</a>
@@ -32,67 +32,60 @@ const { id } = Astro.params;
           </div>
           <div class="p-6 space-y-4" id="service-info">
             <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
-              <span class="text-gray-500">상품</span>
-              <span class="font-medium" id="info-product">-</span>
-            </div>
-            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
               <span class="text-gray-500">상태</span>
-              <span class="font-medium" id="info-status">-</span>
+              <span class="font-medium" id="info-status">로딩 중...</span>
             </div>
             <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
-              <span class="text-gray-500">월 요금</span>
-              <span class="font-medium" id="info-price">-</span>
-            </div>
-            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
-              <span class="text-gray-500">다음 결제일</span>
-              <span class="font-medium" id="info-next-billing">-</span>
-            </div>
-            <div class="flex items-center justify-between py-2 border-b border-gray-100 dark:border-slate-800">
-              <span class="text-gray-500">구독 ID</span>
-              <span class="font-mono text-sm" id="info-sub-id">-</span>
-            </div>
-            <div class="flex items-center justify-between py-2">
               <span class="text-gray-500">생성일</span>
               <span class="font-medium" id="info-created">-</span>
             </div>
-          </div>
-        </div>
-
-        <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
-          <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
-            <h2 class="text-lg font-semibold">최근 인보이스</h2>
-          </div>
-          <div class="p-6" id="service-invoices">
-            <div class="text-center py-12 text-gray-500">불러오는 중...</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="space-y-6">
-        <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
-          <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800">
-            <h2 class="text-lg font-semibold">작업</h2>
-          </div>
-          <div class="p-6 space-y-4">
-            <a href="/billing/portal" target="_blank" class="w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">결제 수단 관리 (Stripe 포털)</a>
-            <a href="/services" class="w-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">서비스 목록으로 돌아가기</a>
-          </div>
-        </div>
-
-        <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
-          <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800">
-            <h2 class="text-lg font-semibold">위험 구역</h2>
-          </div>
-          <div class="p-6 space-y-4 text-sm text-gray-500 dark:text-gray-400">
-            <p>서비스를 취소하면 즉시 중단되며 데이터는 30일 후 영구 삭제됩니다.</p>
-            <p class="text-red-600 dark:text-red-400 font-medium">이 작업은 되돌릴 수 없습니다.</p>
           </div>
         </div>
       </div>
     </div>
   </div>
 
-  <script type="module">
-    import { initServiceDetail } from '@/scripts/service-detail.ts';
+  <script>
+    // 외부 .ts 파일 임포트로 인한 MIME 타입 에러를 방지하기 위해 클라이언트 로직을 직접 인라인으로 처리
+    const wrapper = document.querySelector('[data-service-id]');
+    const serviceId = wrapper?.getAttribute('data-service-id');
+    
+    const nameEl = document.getElementById('service-name');
+    const statusEl = document.getElementById('info-status');
+    const createdEl = document.getElementById('info-created');
+    const cancelBtn = document.getElementById('cancel-btn');
+
+    async function fetchServiceDetail() {
+      if (!serviceId || serviceId === '_') return;
+      try {
+        const res = await fetch(`/api/services/${serviceId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (nameEl) nameEl.textContent = data.name || '서비스 상세';
+          if (statusEl) statusEl.textContent = data.status || '-';
+          if (createdEl) createdEl.textContent = data.createdAt ? new Date(data.createdAt).toLocaleDateString() : '-';
+        } else {
+          if (statusEl) statusEl.textContent = '정보를 불러오지 못했습니다.';
+        }
+      } catch (err) {
+        if (statusEl) statusEl.textContent = '오류가 발생했습니다.';
+      }
+    }
+
+    cancelBtn?.addEventListener('click', async () => {
+      if (!confirm('정말 이 서비스를 취소/삭제하시겠습니까?')) return;
+      try {
+        const res = await fetch(`/api/services/${serviceId}`, { method: 'DELETE' });
+        if (res.ok) {
+          window.location.href = '/services';
+        } else {
+          alert('작업 처리에 실패했습니다.');
+        }
+      } catch (e) {
+        alert('서버 통신 중 오류가 발생했습니다.');
+      }
+    });
+
+    fetchServiceDetail();
   </script>
 </Layout>
