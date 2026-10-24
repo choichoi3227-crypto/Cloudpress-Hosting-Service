@@ -69,7 +69,12 @@ import Layout from '../layouts/Layout.astro';
     </div>
   </div>
 
-  <script type="module">
+  <!-- Astro 빌더가 인식할 수 있도록 수정: .ts 확장자를 제거하고 번들링되도록 처리 -->
+  <script>
     import { loadDashboard } from '../scripts/dashboard.ts';
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      loadDashboard();
+    });
   </script>
 </Layout>
