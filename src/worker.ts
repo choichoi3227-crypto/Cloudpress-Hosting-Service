@@ -443,14 +443,23 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
 export default {
   async fetch(req: Request, env: Env, ctx: any): Promise<Response> {
     const url = new URL(req.url);
+
     if (url.pathname.startsWith("/api/")) {
       return handleApi(req, env);
     }
-    // /services/:id 는 정적 플레이스홀더 페이지(/services/_/)로 연결 (ID는 클라이언트에서 처리)
+
+    // /services/:id 는 정적 플레이스홀더 페이지(/services/_/)로 연결
     if (/^\/services\/[^/]+\/?$/.test(url.pathname) && !url.pathname.startsWith("/services/_")) {
       return env.ASSETS.fetch(new Request(new URL("/services/_/", url), req));
     }
-    return env.ASSETS.fetch(req);
+
+    // 정적 Asset 요청 처리 및 404 시 index.html로 Fallback
+    const assetResponse = await env.ASSETS.fetch(req);
+    if (assetResponse.status === 404 && !url.pathname.includes(".")) {
+      return env.ASSETS.fetch(new Request(new URL("/index.html", url), req));
+    }
+
+    return assetResponse;
   },
 
   async queue(batch: { messages: { body: { jobId: string }; ack(): void }[] }, env: Env): Promise<void> {
