@@ -1,7 +1,13 @@
-
 ---
 import Layout from '@/layouts/Layout.astro';
-export const prerender = false;
+
+export async function getStaticPaths() {
+  return [
+    { params: { id: '_' } },
+  ];
+}
+
+const { id } = Astro.params;
 ---
 
 <Layout title="서비스 상세 - CloudPress">
