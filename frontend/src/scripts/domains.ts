@@ -51,7 +51,7 @@ export function initDomainSearch(): void {
         resultsDiv.innerHTML = `
           <div class="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
             <p class="font-medium text-green-800 dark:text-green-300">${hostname} 등록 가능!</p>
-            <p class="text-sm text-green-600 dark:text-green-400 mt-1">예상 연간 비용: 약 ₩${(data.price / 1000000).toLocaleString()}</p>
+            <p class="text-sm text-green-600 dark:text-green-400 mt-1">예상 연간 비용: 약 $${(data.price / 1000000).toFixed(2)}</p>
             <button onclick="openDomainModal('${hostname}')" class="mt-3 bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">등록 진행</button>
           </div>
         `;

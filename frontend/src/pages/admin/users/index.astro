@@ -34,7 +34,7 @@ import Layout from "../../../layouts/Layout.astro";
     </div>
   </div>
 
-  <script type="module">
+  <script>
     async function loadUsers() {
       try {
         const res = await fetch("/api/admin/users", { credentials: "include" });

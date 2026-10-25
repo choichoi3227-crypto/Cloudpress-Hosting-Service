@@ -72,7 +72,7 @@ import Layout from "../../layouts/Layout.astro";
     </div>
   </div>
 
-  <script type="module">
+  <script>
     async function loadContainers() {
       try {
         const res = await fetch("/api/containers", { credentials: "include" });
@@ -178,8 +178,8 @@ import Layout from "../../layouts/Layout.astro";
           if (action === "stop") await containerAction(id, "suspend");
           else if (action === "start") await containerAction(id, "resume");
           else if (action === "wake") await containerAction(id, "resume");
-          else if (action === "logs") window.open("/dashboard/containers/" + id + "/logs", "_blank");
-          else if (action === "metrics") window.open("/dashboard/containers/" + id + "/metrics", "_blank");
+          else if (action === "logs") window.open("/containers/" + id + "/logs", "_blank");
+          else if (action === "metrics") window.open("/containers/" + id + "/metrics", "_blank");
         });
       });
     }

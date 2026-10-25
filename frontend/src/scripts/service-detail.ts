@@ -64,7 +64,7 @@ function renderServiceDetail(sub: any): void {
   document.getElementById('info-status')!.innerHTML =
     `<span class="px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(sub.status)}">${escapeHtml(getStatusLabel(sub.status))}</span>`;
   document.getElementById('info-price')!.textContent =
-    '\u20A9' + ((sub.product?.monthlyMicro ?? 0) / 1000000).toLocaleString() + '/\uC6D4';
+    '$' + ((sub.product?.monthlyMicro ?? 0) / 1000000).toFixed(2) + '/\uC6D4';
   document.getElementById('info-next-billing')!.textContent = formatDate(sub.currentPeriodEnd);
   document.getElementById('info-sub-id')!.textContent = sub.id;
   document.getElementById('info-created')!.textContent = formatDate(sub.createdAt || new Date().toISOString());
@@ -87,7 +87,7 @@ function renderInvoices(invoices: any[]): void {
       </div>
       <div class="flex items-center gap-3">
         <span class="px-2 py-1 text-xs font-medium rounded-full ${getInvoiceStatusColor(inv.status)}">${escapeHtml(getInvoiceStatusLabel(inv.status))}</span>
-        <span class="font-medium tabular-nums">\u20A9${((inv.totalMicro ?? 0) / 1000000).toLocaleString()}</span>
+        <span class="font-medium tabular-nums">$${((inv.totalMicro ?? 0) / 1000000).toFixed(2)}</span>
         <span class="text-sm text-gray-500">${formatDate(inv.createdAt)}</span>
       </div>
     </div>

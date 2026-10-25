@@ -52,7 +52,7 @@ import Layout from "../../layouts/Layout.astro";
     </div>
   </div>
 
-  <script type="module">
+  <script>
     async function loadDatabases() {
       try {
         const res = await fetch("/api/databases", { credentials: "include" });

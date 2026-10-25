@@ -1,0 +1,415 @@
+import { type D1Like, newId, nowIso } from "./lib/db";
+import { type SessionInfo, audit, revokeAllSessions, hashPasswordForUser } from "./lib/auth";
+import { verifyPassword } from "./lib/crypto";
+import type { Env } from "./worker";
+import { buildRuntime } from "./runtime";
+import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
+import { parseCurrency, latestFxRate } from "./lib/currency";
+import { recordFxSample } from "./lib/fxStore";
+import { ServiceError, connectDomain } from "./lib/zoneService";
+import { createQuoteRouted } from "./lib/domainOrders";
+
+export interface ApiCtx {
+  req: Request;
+  env: Env;
+  url: URL;
+  now: number;
+  session: SessionInfo;
+  json(data: unknown, status?: number, extra?: Record<string, string>): Response;
+  body(maxBytes?: number): Promise<Record<string, any> | null>;
+}
+
+type Handler = (c: ApiCtx, m: RegExpMatchArray) => Promise<Response>;
+interface Route { method: string; re: RegExp; admin?: boolean; h: Handler }
+
+const routes: Route[] = [];
+const add = (method: string, path: string, h: Handler, admin = false) =>
+  routes.push({ method, re: new RegExp("^" + path.replace(/:[a-z]+/gi, "([^/]+)") + "/?$"), admin, h });
+
+const all = async <T = any>(db: D1Like, sql: string, ...b: unknown[]): Promise<T[]> => (await db.prepare(sql).bind(...b).all<T>()).results;
+const one = async <T = any>(db: D1Like, sql: string, ...b: unknown[]): Promise<T | null> => db.prepare(sql).bind(...b).first<T>();
+const parseJson = <T>(s: string | null | undefined, d: T): T => { try { return s ? (JSON.parse(s) as T) : d; } catch { return d; } };
+const fxOf = (db: D1Like) => latestFxRate(db);
+
+/** 라우터. 일치하는 라우트가 없으면 null(호출자가 404 처리). */
+export async function routeApi(c: ApiCtx): Promise<Response | null> {
+  const path = c.url.pathname;
+  for (const r of routes) {
+    if (r.method !== c.req.method) continue;
+    const m = path.match(r.re);
+    if (!m) continue;
+    if (r.admin && c.session.user.role !== "admin") return c.json({ error: "forbidden" }, 403);
+    return r.h(c, m);
+  }
+  return null;
+}
+
+/* ───────────── 상품 · 구독 ───────────── */
+
+export async function listPlans(db: D1Like) {
+  const rows = await all(db, `SELECT p.id, p.kind, p.name_ko, p.instance_type, p.target_vcpu, p.included_storage_gb, p.included_active_hours, pr.monthly_micro
+    FROM products p JOIN prices pr ON pr.product_id = p.id AND pr.retired_at IS NULL
+    WHERE p.on_sale = 1 AND pr.version = (SELECT MAX(version) FROM prices WHERE product_id = p.id AND retired_at IS NULL)
+    ORDER BY p.kind, pr.monthly_micro`);
+  return rows.map((r: any) => ({ id: r.id, kind: r.kind, nameKo: r.name_ko, monthlyMicro: r.monthly_micro, instanceType: r.instance_type, targetVcpu: r.target_vcpu, includedStorageGb: r.included_storage_gb, includedActiveHours: r.included_active_hours }));
+}
+
+const subSelect = `SELECT s.id, s.product_id, s.status, s.current_period_start, s.current_period_end, s.cancel_at_period_end, s.created_at, s.billing_interval, s.quantity,
+    p.kind, p.name_ko, pr.monthly_micro
+  FROM subscriptions s JOIN products p ON p.id = s.product_id JOIN prices pr ON pr.id = s.price_version_id`;
+const subOut = (r: any) => ({
+  id: r.id, productId: r.product_id, status: r.status, currentPeriodStart: r.current_period_start, currentPeriodEnd: r.current_period_end,
+  cancelAtPeriodEnd: !!r.cancel_at_period_end, createdAt: r.created_at, billingInterval: r.billing_interval, quantity: r.quantity,
+  product: { id: r.product_id, nameKo: r.name_ko, kind: r.kind, monthlyMicro: r.monthly_micro },
+});
+
+add("GET", "/api/subscriptions", async (c) => {
+  // 결제 전(incomplete) 구독은 목록에서 숨긴다. 결제 완료는 Stripe 웹훅으로만 확정된다.
+  const rows = await all(c.env.DB, `${subSelect} WHERE s.customer_id = ? AND s.status NOT IN ('incomplete') ORDER BY s.created_at DESC`, c.session.user.id);
+  return c.json(rows.map(subOut));
+});
+
+add("POST", "/api/subscriptions", async (c) => {
+  const b = await c.body(2048);
+  if (!b || typeof b.productId !== "string") return c.json({ error: "bad_request" }, 400);
+  let cur;
+  try { cur = parseCurrency(b.currency ?? "USD"); } catch { return c.json({ error: "bad_currency" }, 400); }
+  const rt = buildRuntime(c.env);
+  const r = await createSubscriptionCheckout(c.env.DB, rt.stripe, c.session.user.id, b.productId, cur, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now, fxRateMicro: await fxOf(c.env.DB) });
+  return c.json({ ok: true, subscriptionId: r.subscriptionId, url: r.url }, 201);
+});
+
+add("GET", "/api/subscriptions/:id", async (c, m) => {
+  const r = await one(c.env.DB, `${subSelect} WHERE s.id = ? AND s.customer_id = ?`, m[1], c.session.user.id);
+  return r ? c.json(subOut(r)) : c.json({ error: "not_found" }, 404);
+});
+
+// 취소는 현재 결제 기간 종료 시점부터 적용한다(추가 CPU 취소 정책과 동일). 즉시 환불은 하지 않는다.
+add("POST", "/api/services/:id/cancel", async (c, m) => {
+  const s = await one<{ id: string; status: string }>(c.env.DB, "SELECT id, status FROM subscriptions WHERE id = ? AND customer_id = ?", m[1], c.session.user.id);
+  if (!s) return c.json({ error: "not_found" }, 404);
+  if (!["active", "past_due", "suspended"].includes(s.status)) return c.json({ error: "bad_state", message: "취소할 수 없는 상태입니다." }, 409);
+  await c.env.DB.prepare("UPDATE subscriptions SET cancel_at_period_end = 1, status = 'canceling', updated_at = ? WHERE id = ?").bind(nowIso(c.now), s.id).run();
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "subscription.cancel", targetType: "subscription", targetId: s.id }, c.now);
+  return c.json({ ok: true, cancelAtPeriodEnd: true });
+});
+
+for (const [action, from, to] of [["suspend", "active", "suspended"], ["resume", "suspended", "active"]] as const) {
+  add("POST", `/api/services/:id/${action}`, async (c, m) => {
+    const r = await c.env.DB.prepare("UPDATE subscriptions SET status = ?, updated_at = ? WHERE id = ? AND customer_id = ? AND status = ?").bind(to, nowIso(c.now), m[1], c.session.user.id, from).run();
+    if (r.meta.changes === 0) return c.json({ error: "bad_state", message: "현재 상태에서는 실행할 수 없습니다." }, 409);
+    await audit(c.env.DB, { actorId: c.session.user.id, action: `subscription.${action}`, targetType: "subscription", targetId: m[1] }, c.now);
+    return c.json({ ok: true });
+  });
+}
+
+add("POST", "/api/billing/portal", async (c) => {
+  const rt = buildRuntime(c.env);
+  return c.json(await createPortal(c.env.DB, rt.stripe, c.session.user.id, c.env.APP_ORIGIN));
+});
+
+/* ───────────── 청구 ───────────── */
+
+const invOut = (r: any) => ({ id: r.id, subscriptionId: r.subscription_id, status: r.status, totalMicro: r.total_micro, subtotalMicro: r.subtotal_micro, periodStart: r.period_start, periodEnd: r.period_end, createdAt: r.created_at });
+
+add("GET", "/api/billing/invoices", async (c) => {
+  const sub = c.url.searchParams.get("subscription");
+  const rows = sub
+    ? await all(c.env.DB, "SELECT * FROM invoices WHERE customer_id = ? AND subscription_id = ? ORDER BY created_at DESC LIMIT 100", c.session.user.id, sub)
+    : await all(c.env.DB, "SELECT * FROM invoices WHERE customer_id = ? ORDER BY created_at DESC LIMIT 100", c.session.user.id);
+  return c.json(rows.map(invOut));
+});
+
+// 다음 결제 예정: 활성 구독의 가격 버전 합계(초과 사용료는 인보이스 확정 시점에 계산되므로 포함하지 않는다).
+add("GET", "/api/billing/upcoming", async (c) => {
+  const rows = await all(c.env.DB, `SELECT s.current_period_start AS ps, s.current_period_end AS pe, pr.monthly_micro AS m, s.quantity AS q
+    FROM subscriptions s JOIN prices pr ON pr.id = s.price_version_id
+    WHERE s.customer_id = ? AND s.status = 'active' AND s.cancel_at_period_end = 0 AND s.current_period_end IS NOT NULL ORDER BY s.current_period_end`, c.session.user.id);
+  if (!rows.length) return c.json(null);
+  const total = rows.reduce((a: number, r: any) => a + r.m * (r.q || 1), 0);
+  return c.json({ totalMicro: total, periodStart: rows[0].ps, periodEnd: rows[0].pe, note: "초과 사용료 제외 기본 요금 합계(USD)" });
+});
+
+/* ───────────── 사용자 ───────────── */
+
+add("GET", "/api/user/profile", async (c) => {
+  const u = await one(c.env.DB, "SELECT id,email,role,status,locale,created_at FROM users WHERE id = ?", c.session.user.id);
+  return c.json({ user: { id: u.id, email: u.email, role: u.role, status: u.status, locale: u.locale, createdAt: u.created_at } });
+});
+
+add("POST", "/api/user/password", async (c) => {
+  const b = await c.body(4096);
+  if (!b || typeof b.currentPassword !== "string" || typeof b.newPassword !== "string") return c.json({ error: "bad_request" }, 400);
+  const row = await one<{ password_hash: string }>(c.env.DB, "SELECT password_hash FROM users WHERE id = ?", c.session.user.id);
+  if (!row || !(await verifyPassword(b.currentPassword, row.password_hash))) return c.json({ error: "invalid_credentials", message: "현재 비밀번호가 올바르지 않습니다." }, 403);
+  const hash = await hashPasswordForUser(b.newPassword);
+  if (!hash.ok) return c.json({ error: "weak_password", message: hash.message }, 400);
+  await c.env.DB.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").bind(hash.hash, nowIso(c.now), c.session.user.id).run();
+  // 다른 기기의 세션은 모두 폐기하고 현재 세션만 유지한다.
+  await c.env.DB.prepare("UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND id != ? AND revoked_at IS NULL").bind(nowIso(c.now), c.session.user.id, c.session.sessionId).run();
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "user.password_change", targetType: "user", targetId: c.session.user.id }, c.now);
+  return c.json({ ok: true });
+});
+
+// 계정 삭제: 활성 구독이 있으면 거부(청구 중단 없이 계정만 지우면 결제가 계속되기 때문).
+add("DELETE", "/api/user/account", async (c) => {
+  const open = await one<{ n: number }>(c.env.DB, "SELECT COUNT(*) AS n FROM subscriptions WHERE customer_id = ? AND status IN ('active','past_due','suspended','canceling')", c.session.user.id);
+  if (open && open.n > 0) return c.json({ error: "active_subscriptions", message: "활성 구독이 있어 삭제할 수 없습니다. 먼저 모든 서비스를 취소하세요." }, 409);
+  await c.env.DB.prepare("UPDATE users SET status = 'deleted', updated_at = ? WHERE id = ?").bind(nowIso(c.now), c.session.user.id).run();
+  await revokeAllSessions(c.env.DB, c.session.user.id, c.now);
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "user.delete", targetType: "user", targetId: c.session.user.id }, c.now);
+  return c.json({ ok: true });
+});
+
+/* ───────────── 도메인 ───────────── */
+
+add("GET", "/api/domains", async (c) => {
+  const zones = await all(c.env.DB, "SELECT id, hostname, status, name_servers_json, created_at, activated_at FROM dns_zones WHERE customer_id = ? ORDER BY created_at DESC", c.session.user.id);
+  const orders = await all(c.env.DB, "SELECT id, hostname, status, created_at FROM domain_orders WHERE customer_id = ? AND status NOT IN ('expired','cancelled') ORDER BY created_at DESC", c.session.user.id);
+  const seen = new Set(zones.map((z: any) => z.hostname));
+  return c.json([
+    ...zones.map((z: any) => ({ id: z.id, hostname: z.hostname, ownershipStatus: z.status === "active" ? "verified" : "pending", sslStatus: z.status === "active" ? "active" : "pending", nameServers: parseJson<string[]>(z.name_servers_json, []), createdAt: z.created_at, kind: "zone" })),
+    ...orders.filter((o: any) => !seen.has(o.hostname)).map((o: any) => ({ id: o.id, hostname: o.hostname, ownershipStatus: "pending", sslStatus: "pending", orderStatus: o.status, createdAt: o.created_at, kind: "order" })),
+  ]);
+});
+
+// 보유 도메인 연결: Cloudflare 영역을 만들고 네임서버를 안내한다.
+add("POST", "/api/domains", async (c) => {
+  const b = await c.body(8192);
+  if (!b || typeof b.hostname !== "string") return c.json({ error: "bad_request" }, 400);
+  const rt = buildRuntime(c.env);
+  const r = await connectDomain(c.env.DB, rt.zones, c.session.user.id, b.hostname, c.now);
+  return c.json({ ok: true, ...r }, 201);
+});
+
+add("GET", "/api/domains/check", async (c) => {
+  const q = (c.url.searchParams.get("q") ?? "").trim().toLowerCase();
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(q) || q.length > 253) return c.json({ error: "bad_hostname" }, 400);
+  const taken = await one(c.env.DB, "SELECT 1 AS x FROM dns_zones WHERE hostname = ? AND status != 'deleted'", q);
+  return c.json({ hostname: q, connectedInCloudPress: !!taken, note: "등록 가능 여부와 가격은 견적 요청 시 등록기관에서 확인합니다." });
+});
+
+add("POST", "/api/domains/quote", async (c) => {
+  const b = await c.body(8192);
+  if (!b || typeof b.hostname !== "string" || typeof b.contact !== "object") return c.json({ error: "bad_request" }, 400);
+  const rt = buildRuntime(c.env);
+  const r = await createQuoteRouted(c.env.DB, rt.ports, rt.crypto, { customerId: c.session.user.id, hostname: b.hostname, contact: b.contact, nowMs: c.now, currency: parseCurrency(b.currency ?? "USD"), fxRateMicro: await fxOf(c.env.DB) } as any);
+  return c.json(r, 201);
+});
+
+add("POST", "/api/domains/orders/:id/checkout", async (c, m) => {
+  const rt = buildRuntime(c.env);
+  return c.json(await createDomainCheckout(c.env.DB, rt.stripe, c.session.user.id, m[1]!, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now, fxRateMicro: await fxOf(c.env.DB) }));
+});
+
+/* ───────────── 컨테이너 · 데이터베이스 (고객 소유 자원) ───────────── */
+
+add("GET", "/api/containers", async (c) => {
+  const rows = await all(c.env.DB, `SELECT c.id, c.subscription_id, c.instance_type, c.target_vcpu, c.actual_vcpu, c.state, c.created_at,
+      (SELECT ip FROM container_instances i WHERE i.container_id = c.id ORDER BY i.created_at DESC LIMIT 1) AS ip
+    FROM containers c WHERE c.customer_id = ? AND c.deleted_at IS NULL ORDER BY c.created_at DESC`, c.session.user.id);
+  return c.json(rows);
+});
+
+// 컨테이너 제어는 실제 Cloudflare Containers 연결이 필요하다. 연결 전에는 성공한 것처럼 응답하지 않는다.
+for (const act of ["start", "stop", "restart", "delete"]) {
+  add("POST", `/api/containers/:id/${act}`, async (c, m) => {
+    const owned = await one(c.env.DB, "SELECT id FROM containers WHERE id = ? AND customer_id = ? AND deleted_at IS NULL", m[1], c.session.user.id);
+    if (!owned) return c.json({ error: "not_found" }, 404);
+    if (c.env.CLOUDPRESS_MODE === "live") return c.json({ error: "not_configured", message: "컨테이너 매니저가 아직 연결되지 않아 이 작업을 실행할 수 없습니다. 운영자에게 문의하세요." }, 503);
+    const to = act === "start" || act === "restart" ? "running" : act === "stop" ? "stopped" : "deleted";
+    await c.env.DB.prepare("UPDATE containers SET state = ?, deleted_at = CASE WHEN ? = 'deleted' THEN ? ELSE deleted_at END WHERE id = ?").bind(to, to, nowIso(c.now), m[1]).run();
+    await audit(c.env.DB, { actorId: c.session.user.id, action: `container.${act}`, targetType: "container", targetId: m[1] }, c.now);
+    return c.json({ ok: true, state: to, mode: "mock" });
+  });
+}
+
+add("GET", "/api/databases", async (c) => {
+  const dbs = await all(c.env.DB, "SELECT id, subscription_id, engine, provider, state, storage_limit_gb, last_backup_at, created_at FROM databases WHERE customer_id = ? ORDER BY created_at DESC", c.session.user.id);
+  const out = [];
+  for (const d of dbs) {
+    out.push({ ...d,
+      replicas: await all(c.env.DB, "SELECT id, replica_type, status, replication_lag_ms FROM database_replicas WHERE database_id = ?", d.id),
+      pitrSnapshots: await all(c.env.DB, "SELECT id, created_at, expires_at FROM database_pitr_snapshots WHERE database_id = ?", d.id) });
+  }
+  return c.json({ databases: out });
+});
+
+// DB는 DB 상품 구독(결제) 후 작업 큐가 생성한다. 직접 생성 요청은 결제 흐름으로 안내한다.
+add("POST", "/api/databases", async (c) => c.json({ error: "purchase_required", message: "ClouDB 상품을 구독하면 결제 확인 후 자동으로 생성됩니다.", next: "/services/create" }, 402));
+
+for (const [act, label] of [["backup", "백업"], ["replicas", "레플리카"]] as const) {
+  add("POST", `/api/databases/:id/${act}`, async (c, m) => {
+    const d = await one(c.env.DB, "SELECT id FROM databases WHERE id = ? AND customer_id = ?", m[1], c.session.user.id);
+    if (!d) return c.json({ error: "not_found" }, 404);
+    return c.json({ error: "not_configured", message: `${label} 실행기(컨테이너·R2 연동)가 아직 연결되지 않았습니다.` }, 503);
+  });
+}
+
+/* ───────────── 운영자 전용: 관리자 · 게이트웨이 · 메쉬 · 관측 · 플릿 ───────────── */
+
+add("GET", "/api/admin/summary", async (c) => {
+  const db = c.env.DB;
+  const users = await one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM users WHERE status != 'deleted'");
+  const subs = await one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM subscriptions WHERE status = 'active'");
+  const rev = await one<{ s: number }>(db, "SELECT COALESCE(SUM(amount_micro),0) AS s FROM payments WHERE status = 'succeeded' AND paid_at >= ?", nowIso(c.now - 30 * 86400_000));
+  const dead = await one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM deployment_jobs WHERE state = 'dead'");
+  const waste = await all(db, "SELECT resource_id, kind, payload_json FROM resource_recommendations WHERE status = 'open' ORDER BY est_saving_micro DESC LIMIT 20").catch(() => []);
+  const pend = await one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM affiliate_payouts WHERE status = 'pending'");
+  return c.json({
+    totalUsers: users?.n ?? 0, activeSubscriptions: subs?.n ?? 0, totalRevenueMicro: rev?.s ?? 0,
+    systemHealth: (dead?.n ?? 0) > 0 ? "degraded" : "healthy",
+    wasteResources: (waste as any[]).map((w) => { const p = parseJson<any>(w.payload_json, {}); return { resourceId: w.resource_id, kind: w.kind, detail: p.detail ?? "", action: p.action ?? "" }; }),
+    pendingApprovals: pend?.n ?? 0,
+  });
+}, true);
+
+add("GET", "/api/admin/users", async (c) => c.json({ users: await all(c.env.DB, "SELECT id, email, role, status, created_at FROM users ORDER BY created_at DESC LIMIT 500") }), true);
+
+add("PATCH", "/api/admin/users/:id", async (c, m) => {
+  const b = await c.body(1024);
+  if (!b) return c.json({ error: "bad_request" }, 400);
+  if (m[1] === c.session.user.id) return c.json({ error: "self_change", message: "자기 자신의 권한·상태는 변경할 수 없습니다." }, 400);
+  const sets: string[] = []; const vals: unknown[] = [];
+  if (b.status !== undefined) { if (!["active", "suspended"].includes(b.status)) return c.json({ error: "bad_status" }, 400); sets.push("status = ?"); vals.push(b.status); }
+  if (b.role !== undefined) { if (!["customer", "admin", "affiliate_only"].includes(b.role)) return c.json({ error: "bad_role" }, 400); sets.push("role = ?"); vals.push(b.role); }
+  if (!sets.length) return c.json({ error: "nothing_to_update" }, 400);
+  const r = await c.env.DB.prepare(`UPDATE users SET ${sets.join(", ")}, updated_at = ? WHERE id = ? AND status != 'deleted'`).bind(...vals, nowIso(c.now), m[1]).run();
+  if (r.meta.changes === 0) return c.json({ error: "not_found" }, 404);
+  if (b.status === "suspended") await revokeAllSessions(c.env.DB, m[1]!, c.now);
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "admin.user_update", targetType: "user", targetId: m[1], detail: { status: b.status, role: b.role } }, c.now);
+  return c.json({ ok: true });
+}, true);
+
+add("GET", "/api/admin/subscriptions", async (c) => c.json({ subscriptions: await all(c.env.DB, `SELECT s.id, u.email AS customer_email, p.kind AS product_kind, s.status, s.billing_interval, s.current_period_end
+  FROM subscriptions s JOIN users u ON u.id = s.customer_id JOIN products p ON p.id = s.product_id ORDER BY s.created_at DESC LIMIT 500`) }), true);
+
+add("GET", "/api/admin/billing", async (c) => {
+  const db = c.env.DB;
+  const rev = await one<{ s: number }>(db, "SELECT COALESCE(SUM(amount_micro),0) AS s FROM payments WHERE status = 'succeeded' AND paid_at >= ?", nowIso(c.now - 30 * 86400_000));
+  const out = await one<{ s: number }>(db, "SELECT COALESCE(SUM(total_micro),0) AS s FROM invoices WHERE status = 'open'");
+  const ref = await one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM refunds");
+  const act = await one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM subscriptions WHERE status = 'active'");
+  const invoices = await all(db, `SELECT i.id, u.email AS customer_email, i.total_micro, i.status, i.created_at,
+      (SELECT paid_at FROM payments WHERE invoice_id = i.id AND status = 'succeeded' ORDER BY paid_at DESC LIMIT 1) AS paid_at
+    FROM invoices i JOIN users u ON u.id = i.customer_id ORDER BY i.created_at DESC LIMIT 200`);
+  return c.json({ monthlyRevenue: rev?.s ?? 0, outstanding: out?.s ?? 0, refundsCount: ref?.n ?? 0, activeSubscriptions: act?.n ?? 0, invoices });
+}, true);
+
+add("GET", "/api/admin/system", async (c) => {
+  const db = c.env.DB;
+  let d1Healthy = true; try { await one(db, "SELECT 1 AS ok"); } catch { d1Healthy = false; }
+  const q = await all(db, "SELECT state, COUNT(*) AS n FROM deployment_jobs GROUP BY state");
+  const n = (s: string) => (q.find((r: any) => r.state === s)?.n ?? 0) as number;
+  const cont = await one<{ n: number }>(db, "SELECT COUNT(*) AS n FROM containers WHERE state = 'running' AND deleted_at IS NULL");
+  const errs = await all(db, "SELECT action, target_type, ts, detail_json FROM audit_logs WHERE action LIKE '%failed%' OR action LIKE '%error%' ORDER BY ts DESC LIMIT 20");
+  return c.json({
+    apiP99: null, // Workers 요청 지연 분포는 이 API 에서 측정하지 않는다(관측 대시보드 사용).
+    queuePending: n("queued") + n("retrying"), d1Healthy, activeContainers: cont?.n ?? 0,
+    recentErrors: errs.map((e: any) => ({ message: e.action, timestamp: e.ts, endpoint: e.target_type ?? "-" })),
+    queues: [{ name: "cloudpress-jobs", status: n("dead") > 0 ? "degraded" : "healthy", pending: n("queued"), processing: n("running"), completed: n("succeeded"), failed: n("failed") + n("dead") }],
+    workers: [],
+  });
+}, true);
+
+add("POST", "/api/admin/fx", async (c) => {
+  const b = await c.body(512);
+  const won = Number(b?.wonPerUsd);
+  if (!Number.isFinite(won) || won < 100 || won > 100000) return c.json({ error: "bad_rate", message: "100~100,000 사이 값이어야 합니다." }, 400);
+  const res = await recordFxSample(c.env.DB, { rateMicro: Math.round(won * 1e6), fetchedAtMs: c.now, source: "admin" }, c.now);
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "admin.fx_update", detail: { won, status: res.status } }, c.now);
+  return c.json({ ok: true, status: res.status, reason: res.reason });
+}, true);
+
+// 게이트웨이
+const routeOut = (r: any) => ({ ...r, methods: parseJson<string[]>(r.methods_json, []) });
+add("GET", "/api/gateway/routes", async (c) => c.json({ routes: (await all(c.env.DB, "SELECT * FROM api_gateway_routes ORDER BY created_at DESC")).map(routeOut) }), true);
+add("POST", "/api/gateway/routes", async (c) => {
+  const b = await c.body(4096);
+  if (!b || typeof b.name !== "string" || typeof b.pathPattern !== "string" || (!b.targetService && !b.targetUrl)) return c.json({ error: "bad_request" }, 400);
+  if (b.targetUrl && !/^https:\/\//.test(String(b.targetUrl))) return c.json({ error: "bad_target", message: "targetUrl 은 https 만 허용됩니다." }, 400);
+  const id = newId("rt"); const t = nowIso(c.now);
+  try {
+    await c.env.DB.prepare(`INSERT INTO api_gateway_routes(id,name,path_pattern,methods_json,target_service,target_url,strip_path_prefix,timeout_ms,retries,retry_backoff_ms,circuit_breaker_threshold,circuit_breaker_timeout_sec,auth_required,roles_json,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id, b.name, b.pathPattern, JSON.stringify(b.methods ?? ["GET"]), b.targetService ?? null, b.targetUrl ?? null, b.stripPathPrefix ? 1 : 0,
+      Math.min(Number(b.timeoutMs) || 30000, 120000), Math.min(Number(b.retries) || 0, 5), Number(b.retryBackoffMs) || 100, Number(b.circuitBreakerThreshold) || 5, Number(b.circuitBreakerTimeoutSec) || 30, b.authRequired === false ? 0 : 1, JSON.stringify(b.roles ?? []), t, t).run();
+  } catch (e: any) { return c.json({ error: "conflict", message: "이름 또는 경로가 이미 존재하거나 값이 올바르지 않습니다." }, 409); }
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "gateway.route_create", targetType: "route", targetId: id }, c.now);
+  return c.json({ ok: true, id }, 201);
+}, true);
+add("DELETE", "/api/gateway/routes/:id", async (c, m) => {
+  const r = await c.env.DB.prepare("DELETE FROM api_gateway_routes WHERE id = ?").bind(m[1]).run();
+  return r.meta.changes ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
+}, true);
+
+// 서비스 메쉬
+add("GET", "/api/mesh/services", async (c) => {
+  const ns = c.url.searchParams.get("namespace") ?? "default";
+  const rows = await all(c.env.DB, "SELECT service_name, namespace, COUNT(*) AS n FROM service_endpoints WHERE namespace = ? AND deregistered_at IS NULL AND healthy = 1 GROUP BY service_name, namespace", ns);
+  return c.json({ services: rows.map((r: any) => ({ serviceName: r.service_name, namespace: r.namespace, endpointCount: r.n })) });
+}, true);
+add("GET", "/api/mesh/policies", async (c) => c.json({ policies: (await all(c.env.DB, "SELECT * FROM traffic_policies ORDER BY priority, created_at")).map((p: any) => ({ id: p.id, sourceService: p.source_service, targetService: p.target_service, namespace: p.namespace, policy: p.policy, priority: p.priority, config: parseJson(p.config_json, {}) })) }), true);
+add("POST", "/api/mesh/policies", async (c) => {
+  const b = await c.body(4096);
+  if (!b || typeof b.sourceService !== "string" || typeof b.targetService !== "string" || typeof b.policy !== "string") return c.json({ error: "bad_request" }, 400);
+  const id = newId("tp"); const t = nowIso(c.now);
+  try {
+    await c.env.DB.prepare("INSERT INTO traffic_policies(id,source_service,target_service,namespace,policy,config_json,priority,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)")
+      .bind(id, b.sourceService, b.targetService, b.namespace ?? "default", b.policy, JSON.stringify(b.config ?? {}), Number(b.priority) || 100, t, t).run();
+  } catch { return c.json({ error: "bad_policy", message: "정책 값이 올바르지 않습니다." }, 400); }
+  return c.json({ ok: true, id }, 201);
+}, true);
+add("GET", "/api/mesh/certificates", async (c) => c.json({ certificates: await all(c.env.DB, "SELECT id, service_name, namespace, issued_at, expires_at FROM service_certificates WHERE revoked = 0 ORDER BY expires_at") }), true);
+
+// 관측
+add("GET", "/api/observability/alerts", async (c) => c.json({ alerts: (await all(c.env.DB, `SELECT e.id, e.alert_id, a.name AS alert_name, a.metric_name, a.severity, e.status, e.value
+  FROM observability_alert_events e JOIN observability_alerts a ON a.id = e.alert_id ORDER BY e.started_at DESC LIMIT 200`)).map((r: any) => ({ id: r.id, alertId: r.alert_id, alertName: r.alert_name, metricName: r.metric_name, severity: r.severity, status: r.status, value: r.value })) }), true);
+add("POST", "/api/observability/alerts", async (c) => {
+  const b = await c.body(4096);
+  if (!b || typeof b.name !== "string" || typeof b.metricName !== "string" || typeof b.condition !== "object") return c.json({ error: "bad_request" }, 400);
+  const id = newId("al"); const t = nowIso(c.now);
+  try {
+    await c.env.DB.prepare("INSERT INTO observability_alerts(id,name,description,metric_name,condition_json,severity,enabled,notification_channels_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
+      .bind(id, b.name, b.description ?? null, b.metricName, JSON.stringify(b.condition), b.severity ?? "warning", b.enabled === false ? 0 : 1, JSON.stringify(b.notificationChannels ?? []), t, t).run();
+  } catch { return c.json({ error: "conflict", message: "이미 같은 이름의 알림이 있거나 값이 올바르지 않습니다." }, 409); }
+  return c.json({ ok: true, id }, 201);
+}, true);
+add("POST", "/api/observability/alerts/:id/ack", async (c, m) => {
+  const r = await c.env.DB.prepare("UPDATE observability_alert_events SET status = 'acknowledged', acknowledged_at = ?, acknowledged_by = ? WHERE id = ? AND status = 'firing'").bind(nowIso(c.now), c.session.user.id, m[1]).run();
+  return r.meta.changes ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
+}, true);
+add("GET", "/api/observability/slos", async (c) => c.json({ slos: (await all(c.env.DB, "SELECT * FROM observability_slos ORDER BY created_at DESC")).map((s: any) => ({ id: s.id, name: s.name, service: s.service, target: s.target, window: s.window, current: null, met: false, errorBudgetRemaining: 0 })) }), true);
+add("POST", "/api/observability/metrics/query", async (c) => {
+  const b = await c.body(2048);
+  if (!b || typeof b.name !== "string") return c.json({ error: "bad_request" }, 400);
+  const from = new Date(Number(b.fromMs) || c.now - 3600_000).toISOString(); const to = new Date(Number(b.toMs) || c.now).toISOString();
+  const agg = ["avg", "sum", "min", "max", "count"].includes(b.aggregation) ? (b.aggregation as string).toUpperCase() : "AVG";
+  const r = await one(c.env.DB, `SELECT ${agg}(value) AS value, COUNT(*) AS points FROM observability_metrics WHERE metric_name = ? AND timestamp BETWEEN ? AND ?`, b.name, from, to);
+  return c.json({ name: b.name, aggregation: agg.toLowerCase(), value: r?.value ?? null, points: r?.points ?? 0, from, to });
+}, true);
+
+// 플릿 배포: 기록·상태 관리만 한다. 실제 롤아웃은 컨테이너 매니저 연결 후 실행된다.
+const depOut = (d: any) => ({ id: d.id, name: d.name, status: d.status, strategy: parseJson<any>(d.strategy_json, {}).type ?? "rolling", currentStep: d.current_step, totalSteps: d.total_steps, targetVersion: d.target_version, startedAt: d.started_at });
+add("GET", "/api/fleet/deployments", async (c) => c.json({ deployments: (await all(c.env.DB, "SELECT * FROM fleet_deployments ORDER BY started_at DESC LIMIT 200")).map(depOut) }), true);
+add("POST", "/api/fleet/deployments", async (c) => {
+  const b = await c.body(2048);
+  if (!b || typeof b.name !== "string" || typeof b.targetVersion !== "string") return c.json({ error: "bad_request" }, 400);
+  const type = b.strategy?.type ?? "rolling";
+  if (!["rolling", "canary", "blue_green", "recreate"].includes(type)) return c.json({ error: "bad_strategy" }, 400);
+  const id = newId("deploy");
+  await c.env.DB.prepare("INSERT INTO fleet_deployments(id,name,subscription_id,strategy_json,status,current_step,total_steps,target_version,started_at) VALUES(?,?,NULL,?,'pending',0,?,?,?)")
+    .bind(id, b.name, JSON.stringify({ ...b.strategy, type }), type === "recreate" ? 1 : 5, b.targetVersion, nowIso(c.now)).run();
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "fleet.deployment_create", targetType: "deployment", targetId: id }, c.now);
+  return c.json({ ok: true, id, note: "배포 기록이 생성되었습니다. 실제 롤아웃은 컨테이너 매니저 연결 후 실행됩니다." }, 201);
+}, true);
+for (const [act, from, to] of [["pause", "running", "paused"], ["resume", "paused", "running"], ["rollback", "", "rolled_back"]] as const) {
+  add("POST", `/api/fleet/deployments/:id/${act}`, async (c, m) => {
+    const r = act === "rollback"
+      ? await c.env.DB.prepare("UPDATE fleet_deployments SET status = 'rolled_back' WHERE id = ? AND status != 'rolled_back'").bind(m[1]).run()
+      : await c.env.DB.prepare("UPDATE fleet_deployments SET status = ? WHERE id = ? AND status = ?").bind(to, m[1], from).run();
+    if (!r.meta.changes) return c.json({ error: "bad_state", message: "현재 상태에서는 실행할 수 없습니다." }, 409);
+    await audit(c.env.DB, { actorId: c.session.user.id, action: `fleet.${act}`, targetType: "deployment", targetId: m[1] }, c.now);
+    return c.json({ ok: true });
+  }, true);
+}
+

@@ -1,0 +1,18 @@
+---
+import Layout from '@/layouts/Layout.astro';
+---
+<Layout title="로그아웃">
+  <p class="text-center text-gray-500 py-12">로그아웃 중...</p>
+  <script>
+    (async () => {
+      try {
+        const r = await fetch('/api/auth/csrf', { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json() as { authenticated?: boolean; csrfToken?: string };
+          if (d.authenticated && d.csrfToken) await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': d.csrfToken } });
+        }
+      } catch { /* 무시 */ }
+      window.location.replace('/login');
+    })();
+  </script>
+</Layout>

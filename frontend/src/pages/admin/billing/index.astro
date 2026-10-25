@@ -53,7 +53,7 @@ import Layout from "../../../layouts/Layout.astro";
     </div>
   </div>
 
-  <script type="module">
+  <script>
     async function loadBilling() {
       try {
         const res = await fetch("/api/admin/billing", { credentials: "include" });
@@ -67,8 +67,8 @@ import Layout from "../../../layouts/Layout.astro";
     }
 
     function renderBilling(data) {
-      document.getElementById("monthly-revenue")!.textContent = "₩" + (data.monthlyRevenue / 1000000).toLocaleString();
-      document.getElementById("outstanding")!.textContent = "₩" + (data.outstanding / 1000000).toLocaleString();
+      document.getElementById("monthly-revenue")!.textContent = "$" + (data.monthlyRevenue / 1000000).toFixed(2);
+      document.getElementById("outstanding")!.textContent = "$" + (data.outstanding / 1000000).toFixed(2);
       document.getElementById("refunds-count")!.textContent = data.refundsCount.toString();
       document.getElementById("active-subs")!.textContent = data.activeSubscriptions.toString();
 
@@ -81,7 +81,7 @@ import Layout from "../../../layouts/Layout.astro";
         <tr class="hover:bg-gray-50 dark:hover:bg-slate-800/50">
           <td class="px-6 py-4 font-mono text-sm">${inv.id.slice(0,12)}...</td>
           <td class="px-6 py-4">${inv.customer_email}</td>
-          <td class="px-6 py-4">₩${(inv.total_micro / 1000000).toLocaleString()}</td>
+          <td class="px-6 py-4">$${(inv.total_micro / 1000000).toFixed(2)}</td>
           <td class="px-6 py-4">
             <span class="px-2 py-1 text-xs font-medium rounded-full ${inv.status === "paid" ? "bg-green-100 text-green-800" : inv.status === "open" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-800"}">${inv.status}</span>
           </td>

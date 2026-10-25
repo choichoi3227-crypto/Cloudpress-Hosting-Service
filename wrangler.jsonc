@@ -8,7 +8,9 @@
   "assets": {
     "directory": "./frontend/dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "404-page",
+    // /api 와 /services/* 는 항상 Worker 가 먼저 처리한다(서비스 상세 라우팅). 없는 정적 파일(.js 등)은 HTML 이 아니라 404 를 반환해야 한다.
+    "run_worker_first": ["/api/*", "/services/*"]
   },
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],

@@ -12,7 +12,8 @@ import { runScheduled } from "./lib/scheduler";
 import { latestFxRate } from "./lib/currency";
 import { costSideRate } from "./lib/fx";
 import { recordFxSample } from "./lib/fxStore";
-import { requireRole, ForbiddenError, audit } from "./lib/auth";
+import { ForbiddenError, rotateCsrf } from "./lib/auth";
+import { routeApi, listPlans } from "./api";
 
 export interface Env {
   DB: D1Like;
@@ -57,50 +58,37 @@ async function readJson(req: Request, maxBytes: number): Promise<Record<string, 
 
 const clientIp = (req: Request) => req.headers.get("CF-Connecting-IP") ?? "unknown";
 
-async function ensureTables(db: D1Like) {
-  if (typeof db.prepare === "function") {
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT DEFAULT 'customer',
-        status TEXT DEFAULT 'active',
-        locale TEXT DEFAULT 'ko',
-        timezone TEXT DEFAULT 'Asia/Seoul',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `).run().catch(() => {});
-
-    await db.prepare(`
-      CREATE TABLE IF NOT EXISTS user_sessions (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        token_hash TEXT NOT NULL,
-        csrf_token TEXT NOT NULL,
-        expires_at INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      )
-    `).run().catch(() => {});
+// 마이그레이션 적용 여부 점검(isolate 당 성공 시 1회). 스키마를 요청 중에 임의로 만들지 않는다.
+let schemaOk = false;
+const REQUIRED_TABLES = ["users", "user_sessions", "products", "prices", "subscriptions", "audit_logs"];
+async function schemaReady(db: D1Like): Promise<string | null> {
+  if (schemaOk) return null;
+  for (const t of REQUIRED_TABLES) {
+    try { await db.prepare(`SELECT 1 FROM ${t} LIMIT 1`).first(); }
+    catch { return t; }
   }
+  schemaOk = true;
+  return null;
 }
 
 async function handleApi(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   const now = Date.now();
   try {
-    await ensureTables(env.DB);
-
     if (url.pathname === "/api/health") {
       return json({
         ok: true,
         mode: env.CLOUDPRESS_MODE,
         stripeWebhookConfigured: Boolean(env.STRIPE_WEBHOOK_SECRET),
         encryptionKeyConfigured: Boolean(env.SECRETS_ENCRYPTION_KEY),
-        liveIntegrations: []
+        liveIntegrations: [],
+        schemaMissingTable: await schemaReady(env.DB)
       });
+    }
+
+    {
+      const missing = await schemaReady(env.DB);
+      if (missing) return json({ error: "schema_not_ready", message: `데이터베이스 마이그레이션이 적용되지 않았습니다(없는 테이블: ${missing}). 운영자가 'wrangler d1 migrations apply'를 실행해야 합니다.` }, 503);
     }
 
     if (url.pathname === "/api/webhooks/stripe" && req.method === "POST") {
@@ -165,20 +153,37 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
       return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie() });
     }
 
+    // 페이지 로드 시 세션 확인 + CSRF 토큰 (재)발급. 비로그인도 200(authenticated:false)으로 응답해 콘솔 오류를 만들지 않는다.
+    // 서버에는 토큰 해시만 있으므로 새 토큰으로 회전한다.
+    if (url.pathname === "/api/auth/csrf" && req.method === "GET") {
+      return session
+        ? json({ authenticated: true, csrfToken: await rotateCsrf(env.DB, session.sessionId), user: session.user })
+        : json({ authenticated: false });
+    }
+
     if (url.pathname === "/api/plans" && req.method === "GET") {
-      const { results } = await env.DB.prepare("SELECT * FROM products WHERE on_sale = 1 ORDER BY monthly_micro").all();
-      return json(results);
+      return json(await listPlans(env.DB));
     }
 
     if (!session) return json({ error: "unauthenticated" }, 401);
 
-    if (url.pathname === "/api/user/profile" && req.method === "GET") {
-      return json({ user: session.user });
+    // 인증된 모든 상태 변경 요청은 CSRF 토큰 필수.
+    if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && !(await verifyCsrf(session, req.headers.get("X-CSRF-Token")))) {
+      return json({ error: "bad_csrf", message: "보안 토큰이 만료되었습니다. 페이지를 새로고침하세요." }, 403);
     }
+
+    const routed = await routeApi({
+      req, env, url, now, session,
+      json: (d, st, ex) => json(d, st, ex),
+      body: (max = 8192) => readJson(req, max),
+    });
+    if (routed) return routed;
 
     return json({ error: "not_found" }, 404);
   } catch (e: any) {
     console.error("[API Fatal Error]", e?.message, e?.stack);
+    // 후속 마이그레이션(0007~0009)이 적용되지 않은 DB 에서 해당 기능만 실패하는 경우를 명확히 알린다.
+    if (/no such table/i.test(String(e?.message))) return json({ error: "schema_not_ready", message: "데이터베이스 마이그레이션이 최신이 아닙니다. 운영자가 'wrangler d1 migrations apply'를 실행해야 합니다." }, 503);
     if (e instanceof ServiceError) return json({ error: e.code, message: e.message }, e.code === "not_found" ? 404 : 400);
     if (e instanceof ForbiddenError) return json({ error: "forbidden" }, 403);
     if (e instanceof ConfigError) return json({ error: "not_configured", message: e.message }, 503);
@@ -193,15 +198,15 @@ export default {
       return handleApi(req, env);
     }
 
-    if (/^\/services\/[^/]+\/?$/.test(url.pathname) && !url.pathname.startsWith("/services/_")) {
+    const assetResponse = await env.ASSETS.fetch(req);
+
+    // 서비스 상세(/services/<구독ID>)는 정적 플레이스홀더 페이지를 서빙하고 클라이언트가 ID 를 읽는다.
+    // 실제 정적 페이지(/services/create 등)가 있으면 그것을 우선한다.
+    if (assetResponse.status === 404 && /^\/services\/[^/]+\/?$/.test(url.pathname)) {
       return env.ASSETS.fetch(new Request(new URL("/services/_/", url), req));
     }
 
-    const assetResponse = await env.ASSETS.fetch(req);
-    if (assetResponse.status === 404 && !url.pathname.includes(".")) {
-      return env.ASSETS.fetch(new Request(new URL("/index.html", url), req));
-    }
-
+    // 없는 파일은 404 그대로 반환한다(HTML 로 대체하면 module script MIME 오류가 난다).
     return assetResponse;
   },
 

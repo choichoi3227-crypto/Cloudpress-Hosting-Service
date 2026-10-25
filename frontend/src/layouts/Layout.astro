@@ -13,7 +13,7 @@ const { title } = Astro.props;
     <meta name="description" content="CloudPress 통합 클라우드 호스팅 플랫폼" />
     <meta name="viewport" content="width=device-width" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>{title} - CloudPress</title>
+    <title>{title.endsWith("CloudPress") ? title : `${title} - CloudPress`}</title>
   </head>
   <body class="bg-background dark:bg-background-dark text-text dark:text-text-dark min-h-screen flex flex-col font-sans">
     <header class="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 sticky top-0 z-50">
@@ -24,11 +24,24 @@ const { title } = Astro.props;
           </svg>
           CloudPress
         </a>
-        <nav class="flex items-center gap-6">
+        <nav class="flex flex-wrap items-center gap-4 text-sm">
           <a href="/dashboard" class="text-sm font-medium hover:text-primary transition-colors">대시보드</a>
+          <a href="/services" class="text-sm font-medium hover:text-primary transition-colors">서비스</a>
+          <a href="/containers" class="text-sm font-medium hover:text-primary transition-colors">컨테이너</a>
+          <a href="/database" class="text-sm font-medium hover:text-primary transition-colors">데이터베이스</a>
           <a href="/domains" class="text-sm font-medium hover:text-primary transition-colors">도메인</a>
-          <a href="/admin" class="text-sm font-medium text-amber-600 dark:text-amber-400 font-semibold hover:underline">관리자</a>
-          <a href="/login" class="bg-primary hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">로그인</a>
+          <a href="/billing" class="text-sm font-medium hover:text-primary transition-colors">청구</a>
+          <a href="/profile" class="text-sm font-medium hover:text-primary transition-colors">내 정보</a>
+          <span id="nav-operator" class="hidden items-center gap-4">
+            <a href="/gateway" class="text-sm font-medium text-amber-600 hover:underline">게이트웨이</a>
+            <a href="/mesh" class="text-sm font-medium text-amber-600 hover:underline">메쉬</a>
+            <a href="/observability" class="text-sm font-medium text-amber-600 hover:underline">관측</a>
+            <a href="/fleet" class="text-sm font-medium text-amber-600 hover:underline">플릿</a>
+          </span>
+          <a id="nav-admin" href="/admin" class="hidden text-sm font-medium text-amber-600 dark:text-amber-400 font-semibold hover:underline">관리자</a>
+          <span id="nav-user" class="hidden text-sm text-gray-500"></span>
+          <a id="nav-login" href="/login" class="bg-primary hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">로그인</a>
+          <button id="nav-logout" type="button" class="hidden text-sm font-medium text-gray-600 hover:text-primary">로그아웃</button>
         </nav>
       </div>
     </header>
@@ -36,6 +49,10 @@ const { title } = Astro.props;
     <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <slot />
     </main>
+
+    <script>
+      import '@/scripts/session.ts';
+    </script>
 
     <footer class="bg-white dark:bg-slate-900 border-t border-gray-200 dark:border-slate-800 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
       &copy; 2026 CloudPress Inc. All rights reserved.

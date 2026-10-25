@@ -73,7 +73,7 @@ import Layout from "../../layouts/Layout.astro";
     </form>
   </div>
 
-  <script type="module">
+  <script>
     document.getElementById("register-form")?.addEventListener("submit", async (e) => {
       e.preventDefault();
       const form = e.target;
@@ -96,7 +96,7 @@ import Layout from "../../layouts/Layout.astro";
       try {
         const res = await fetch("/api/domains", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-CSRF-Token": (window).csrfToken },
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": (window as any).csrfToken },
           credentials: "include",
           body: JSON.stringify(data)
         });

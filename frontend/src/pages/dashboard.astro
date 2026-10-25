@@ -7,7 +7,7 @@ import Layout from '../layouts/Layout.astro';
     <div class="flex items-center justify-between">
       <h1 class="text-3xl font-bold text-gray-900 dark:text-white">대시보드</h1>
       <div class="flex gap-3">
-        <a href="/dashboard/services/create" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+        <a href="/services/create" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
           새 서비스 생성
         </a>
       </div>
@@ -35,7 +35,7 @@ import Layout from '../layouts/Layout.astro';
     <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
       <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
         <h2 class="text-lg font-semibold">내 서비스</h2>
-        <a href="/dashboard/services" class="text-sm text-primary hover:underline">전체 보기</a>
+        <a href="/services" class="text-sm text-primary hover:underline">전체 보기</a>
       </div>
       <div class="p-6" id="services-list">
         <div class="text-center py-12 text-gray-500">서비스를 불러오는 중...</div>
@@ -45,7 +45,7 @@ import Layout from '../layouts/Layout.astro';
     <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
       <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
         <h2 class="text-lg font-semibold">최근 청구서</h2>
-        <a href="/dashboard/billing" class="text-sm text-primary hover:underline">전체 보기</a>
+        <a href="/billing" class="text-sm text-primary hover:underline">전체 보기</a>
       </div>
       <div class="p-6" id="invoices-list">
         <div class="text-center py-12 text-gray-500">청구서를 불러오는 중...</div>
@@ -69,12 +69,8 @@ import Layout from '../layouts/Layout.astro';
     </div>
   </div>
 
-  <!-- Astro 빌더가 인식할 수 있도록 수정: .ts 확장자를 제거하고 번들링되도록 처리 -->
   <script>
     import { loadDashboard } from '../scripts/dashboard.ts';
-    
-    document.addEventListener('DOMContentLoaded', () => {
-      loadDashboard();
-    });
+    loadDashboard();
   </script>
 </Layout>

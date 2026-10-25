@@ -49,7 +49,7 @@ import Layout from "../../layouts/Layout.astro";
     </div>
   </div>
 
-  <script type="module">
+  <script>
     async function loadRoutes() {
       try {
         const res = await fetch("/api/gateway/routes", { credentials: "include" });

@@ -34,6 +34,13 @@ export async function registerUser(db: D1Like, emailRaw: string, password: strin
   return { ok: true, userId: id };
 }
 
+/** 비밀번호 정책 검사 후 해시. 비밀번호 변경 등에서 사용. */
+export async function hashPasswordForUser(pw: string): Promise<{ ok: true; hash: string } | { ok: false; message: string }> {
+  const weak = validatePassword(pw);
+  if (weak) return { ok: false, message: weak };
+  return { ok: true, hash: await hashPassword(pw) };
+}
+
 // 사용자 없음/비밀번호 불일치를 시간·메시지로 구분할 수 없게 더미 해시를 검증한다.
 // 주의: Workers 는 전역 스코프에서 crypto 비동기 연산/난수 생성이 금지되므로(오류 10021) 해시를 계산하지 않고
 // 형식이 유효한 고정 PBKDF2 문자열(100,000회)을 상수로 둔다. verifyPassword 는 동일한 반복 횟수로 실제 연산을 수행한다.
@@ -56,6 +63,13 @@ export async function login(db: D1Like, emailRaw: string, password: string, nowM
     .bind(newId("ses"), row.id, await sha256Hex(token), await sha256Hex(csrfToken), nowIso(nowMs + SESSION_TTL_SEC * 1000), nowIso(nowMs)).run();
   await audit(db, { actorId: row.id, action: "user.login", targetType: "user", targetId: row.id }, nowMs);
   return { ok: true, token, csrfToken, user: { id: row.id, email: row.email, role: row.role, status: row.status } };
+}
+
+/** CSRF 토큰 회전: 해시만 저장하므로 원문을 다시 알 수 없다. 새 토큰을 발급해 세션에 묶는다. */
+export async function rotateCsrf(db: D1Like, sessionId: string): Promise<string> {
+  const t = randomToken();
+  await db.prepare("UPDATE user_sessions SET csrf_hash = ? WHERE id = ?").bind(await sha256Hex(t), sessionId).run();
+  return t;
 }
 
 export interface SessionInfo { sessionId: string; csrfHash: string; user: UserRow }

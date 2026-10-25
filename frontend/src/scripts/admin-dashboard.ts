@@ -12,7 +12,7 @@ export async function loadAdminDashboard(): Promise<void> {
 
     if (totalUsersEl) totalUsersEl.textContent = (data.totalUsers ?? 0).toLocaleString();
     if (activeSubsEl) activeSubsEl.textContent = (data.activeSubscriptions ?? 0).toLocaleString();
-    if (monthlyRevenueEl) monthlyRevenueEl.textContent = '₩' + ((data.totalRevenueMicro ?? 0) / 1000000).toLocaleString();
+    if (monthlyRevenueEl) monthlyRevenueEl.textContent = '$' + ((data.totalRevenueMicro ?? 0) / 1000000).toFixed(2);
 
     const healthMap = { 
       healthy: { color: 'bg-green-500', text: '정상' }, 

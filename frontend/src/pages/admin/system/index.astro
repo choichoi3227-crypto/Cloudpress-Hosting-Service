@@ -59,7 +59,7 @@ import Layout from "../../../layouts/Layout.astro";
     </div>
   </div>
 
-  <script type="module">
+  <script>
     async function loadSystem() {
       try {
         const res = await fetch("/api/admin/system", { credentials: "include" });
@@ -73,7 +73,7 @@ import Layout from "../../../layouts/Layout.astro";
     }
 
     function renderSystem(data) {
-      document.getElementById("api-p99")!.textContent = data.apiP99 + "ms";
+      document.getElementById("api-p99")!.textContent = (data.apiP99 == null ? "측정 안 됨" : data.apiP99 + "ms");
       document.getElementById("queue-pending")!.textContent = data.queuePending.toString();
       document.getElementById("d1-status")!.textContent = data.d1Healthy ? "정상" : "장애";
       document.getElementById("active-containers")!.textContent = data.activeContainers.toString();

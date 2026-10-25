@@ -29,7 +29,7 @@ export async function loadBilling(): Promise<void> {
               </div>
               <div class="flex items-center gap-3">
                 <span class="px-2 py-1 text-xs font-medium rounded-full ${getInvoiceStatusColor(inv.status)}">${getInvoiceStatusLabel(inv.status)}</span>
-                <span class="font-medium tabular-nums">₩${(inv.totalMicro / 1000000).toLocaleString()}</span>
+                <span class="font-medium tabular-nums">$${(inv.totalMicro / 1000000).toFixed(2)}</span>
                 <span class="text-sm text-gray-500">${new Date(inv.createdAt).toLocaleDateString('ko-KR')}</span>
               </div>
             </div>
@@ -49,7 +49,7 @@ export async function loadBilling(): Promise<void> {
                   <p class="font-medium">다음 결제 예정</p>
                   <p class="text-sm text-gray-500">${new Date(upcoming.periodStart).toLocaleDateString('ko-KR')} ~ ${new Date(upcoming.periodEnd).toLocaleDateString('ko-KR')}</p>
                 </div>
-                <span class="font-bold text-lg text-primary">₩${(upcoming.totalMicro / 1000000).toLocaleString()}</span>
+                <span class="font-bold text-lg text-primary">$${(upcoming.totalMicro / 1000000).toFixed(2)}</span>
               </div>
             `;
           } else {

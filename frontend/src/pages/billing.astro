@@ -40,9 +40,6 @@ import Layout from '../layouts/Layout.astro';
 
   <script>
     import { loadBilling } from '../scripts/billing.ts';
-    
-    document.addEventListener('DOMContentLoaded', () => {
-      loadBilling();
-    });
+    loadBilling();
   </script>
 </Layout>
