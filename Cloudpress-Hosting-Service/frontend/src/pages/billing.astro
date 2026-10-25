@@ -1,0 +1,45 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="청구 및 결제 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">청구 및 결제</h1>
+      <a href="/billing/portal" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" target="_blank">Stripe 고객 포털</a>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">결제 수단 관리</h2>
+      </div>
+      <div class="p-6">
+        <p class="text-gray-600 dark:text-gray-400 mb-4">Stripe 고객 포털에서 결제 수단을 관리하세요.</p>
+        <a href="/billing/portal" class="bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block" target="_blank">고객 포털 열기</a>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">청구서 내역</h2>
+      </div>
+      <div class="p-6" id="invoices-list">
+        <div class="text-center py-12 text-gray-500">청구서를 불러오는 중...</div>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">결제 예정</h2>
+      </div>
+      <div class="p-6" id="upcoming-list">
+        <div class="text-center py-12 text-gray-500">불러오는 중...</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { loadBilling } from '../scripts/billing.ts';
+    loadBilling();
+  </script>
+</Layout>

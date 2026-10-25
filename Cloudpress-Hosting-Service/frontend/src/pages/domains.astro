@@ -1,0 +1,72 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="도메인 관리 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">도메인 관리</h1>
+      <button id="add-domain-btn" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">도메인 등록</button>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+      <h2 class="text-lg font-semibold mb-4">도메인 검색 및 등록</h2>
+      <div class="flex flex-col sm:flex-row gap-4 max-w-2xl">
+        <input type="text" id="domain-search" placeholder="example.com" class="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
+        <button id="search-btn" class="bg-primary hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-medium transition-colors whitespace-nowrap">검색</button>
+      </div>
+      <div id="search-results" class="mt-4 hidden"></div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800">
+        <h2 class="text-lg font-semibold">내 도메인</h2>
+      </div>
+      <div class="p-6" id="domains-list">
+        <div class="text-center py-12 text-gray-500">도메인을 불러오는 중...</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="domain-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+    <div class="bg-white dark:bg-slate-900 rounded-xl p-6 w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+      <h3 class="text-xl font-semibold mb-4">도메인 등록</h3>
+      <form id="domain-form" class="space-y-4">
+        <input type="hidden" name="hostname" id="modal-hostname" />
+        <div>
+          <label class="block text-sm font-medium mb-1">연락처 이메일</label>
+          <input type="email" name="email" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">전화번호</label>
+          <input type="tel" name="phone" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" placeholder="+82.1012345678" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">이름</label>
+          <input type="text" name="name" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">주소</label>
+          <input type="text" name="street" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" placeholder="도로명 주소" />
+        </div>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label class="block text-sm font-medium mb-1">도시</label>
+            <input type="text" name="city" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">우편번호</label>
+            <input type="text" name="postal" required class="w-full px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary" />
+          </div>
+        </div>
+        <div class="flex gap-3 pt-4">
+          <button type="button" id="modal-cancel" class="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-slate-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors">취소</button>
+          <button type="submit" class="flex-1 bg-primary hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg font-medium transition-colors">견적 요청</button>
+        </div>
+      </form>
+    </div>
+
+  <script type="module">
+    import { initDomainsPage } from '../scripts/domains.ts';
+  </script>
+</Layout>

@@ -1,0 +1,44 @@
+---
+import Layout from '@/layouts/Layout.astro';
+---
+
+<Layout title="회원가입 - CloudPress">
+  <div class="max-w-md mx-auto my-12 bg-white dark:bg-slate-900 p-8 rounded-xl border border-gray-200 dark:border-slate-800 shadow-sm">
+    <div class="text-center mb-6">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">CloudPress 계정 생성</h1>
+      <p class="text-gray-500 text-sm mt-1">무료로 시작하세요</p>
+    </div>
+
+    <form id="register-form" class="space-y-4">
+      <div>
+        <label for="email" class="block text-sm font-medium mb-1">이메일</label>
+        <input type="email" id="email" name="email" required class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
+      </div>
+
+      <div>
+        <label for="password" class="block text-sm font-medium mb-1">비밀번호</label>
+        <input type="password" id="password" name="password" required minlength="8" class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
+        <p class="text-xs text-gray-500 mt-1">최소 8자 이상</p>
+      </div>
+
+      <div>
+        <label for="confirm-password" class="block text-sm font-medium mb-1">비밀번호 확인</label>
+        <input type="password" id="confirm-password" name="confirm-password" required class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
+      </div>
+
+      <div id="error-message" class="hidden text-red-600 text-sm py-2"></div>
+
+      <button type="submit" class="w-full bg-primary hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors">
+        가입하기
+      </button>
+    </form>
+
+    <div class="mt-6 text-center text-sm text-gray-500">
+      이미 계정이 있으신가요? <a href="/login" class="text-primary hover:underline">로그인</a>
+    </div>
+  </div>
+
+  <script>
+    import '@/scripts/register.ts';
+  </script>
+</Layout>

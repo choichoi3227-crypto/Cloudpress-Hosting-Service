@@ -1,0 +1,32 @@
+---
+import Layout from '@/layouts/Layout.astro';
+---
+
+<Layout title="내 서비스 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">내 서비스</h1>
+      <a href="/services/create" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">새 서비스 생성</a>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="p-6" id="services-list">
+        <div class="text-center py-12 text-gray-500">서비스를 불러오는 중...</div>
+      </div>
+    </div>
+
+    <!-- 빈 상태 안내 -->
+    <div id="empty-state" class="hidden text-center py-16">
+      <svg class="mx-auto h-16 w-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+      </svg>
+      <h3 class="mt-4 text-lg font-medium text-gray-900 dark:text-white">등록된 서비스가 없습니다</h3>
+      <p class="mt-2 text-gray-500 dark:text-gray-400">첫 서비스를 생성해보세요</p>
+      <a href="/services/create" class="mt-4 inline-block bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors">서비스 생성하기</a>
+    </div>
+  </div>
+
+  <script type="module">
+    import { loadServices } from '@/scripts/services.ts';
+  </script>
+</Layout>

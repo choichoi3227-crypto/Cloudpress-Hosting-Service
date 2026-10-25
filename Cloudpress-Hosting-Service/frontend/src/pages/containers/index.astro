@@ -1,0 +1,214 @@
+---
+import Layout from "../../layouts/Layout.astro";
+---
+
+<Layout title="컨테이너 관리 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">컨테이너 인스턴스</h1>
+      <div class="flex gap-3">
+        <button id="refresh-btn" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">새로고침</button>
+      </div>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">실행 중</p>
+        <p class="text-3xl font-bold text-green-600 dark:text-green-400 mt-1" id="running-count">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">대기 중</p>
+        <p class="text-3xl font-bold text-amber-600 dark:text-amber-400 mt-1" id="pending-count">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">중지됨</p>
+        <p class="text-3xl font-bold text-gray-500 dark:text-gray-400 mt-1" id="stopped-count">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">총 인스턴스</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="total-count">-</p>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">컨테이너 목록</h2>
+        <div class="flex gap-2">
+          <select id="status-filter" class="px-3 py-1 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm">
+            <option value="">전체 상태</option>
+            <option value="running">실행 중</option>
+            <option value="pending">대기 중</option>
+            <option value="stopped">중지됨</option>
+            <option value="sleeping">절전 모드</option>
+          </select>
+        </div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead class="bg-gray-50 dark:bg-slate-800/50">
+            <tr class="text-left text-sm text-gray-500 dark:text-gray-400">
+              <th class="px-6 py-3">이름</th>
+              <th class="px-6 py-3">상태</th>
+              <th class="px-6 py-3">인스턴스 타입</th>
+              <th class="px-6 py-3">IP</th>
+              <th class="px-6 py-3">생성일</th>
+              <th class="px-6 py-3">액션</th>
+            </tr>
+          </thead>
+          <tbody id="containers-table" class="divide-y divide-gray-200 dark:divide-slate-800">
+            <tr><td colspan="6" class="px-6 py-12 text-center text-gray-500">불러오는 중...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="container-detail" class="hidden bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold" id="detail-title">컨테이너 상세</h2>
+        <button id="close-detail" class="text-gray-400 hover:text-gray-600">×</button>
+      </div>
+      <div class="grid gap-4 md:grid-cols-2" id="detail-content"></div>
+      <div class="mt-6 flex gap-2" id="detail-actions"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    async function loadContainers() {
+      try {
+        const res = await fetch("/api/containers", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          renderContainers(data);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderContainers(containers) {
+      const tbody = document.getElementById("containers-table");
+      const filter = (document.getElementById("status-filter") as HTMLSelectElement).value;
+      
+      const filtered = filter ? containers.filter(c => c.state === filter) : containers;
+      
+      if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="px-6 py-12 text-center text-gray-500">컨테이너가 없습니다.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(c => `
+        <tr class="hover:bg-gray-50 dark:hover:bg-slate-800/50 cursor-pointer" data-id="${c.id}">
+          <td class="px-6 py-4 font-mono text-sm">${c.id.slice(0,12)}...</td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-1 text-xs font-medium rounded-full ${
+              c.state === "running" ? "bg-green-100 text-green-800" :
+              c.state === "pending" ? "bg-amber-100 text-amber-800" :
+              c.state === "sleeping" ? "bg-blue-100 text-blue-800" :
+              "bg-gray-100 text-gray-800"
+            }">${c.state}</span>
+          </td>
+          <td class="px-6 py-4 text-sm">${c.instance_type}</td>
+          <td class="px-6 py-4 text-sm font-mono">${c.ip || "-"}</td>
+          <td class="px-6 py-4 text-sm">${c.created_at ? new Date(c.created_at).toLocaleDateString("ko-KR") : "-"}</td>
+          <td class="px-6 py-4">
+            <button class="action-btn text-primary hover:underline text-sm" data-action="detail" data-id="${c.id}">상세</button>
+          </td>
+        </tr>
+      `).join("");
+
+      document.querySelectorAll(".action-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const id = btn.dataset.id;
+          const action = btn.dataset.action;
+          if (action === "detail") showDetail(id, containers.find(c => c.id === id));
+        });
+      });
+
+      document.querySelectorAll("#containers-table tr[data-id]").forEach(row => {
+        row.addEventListener("click", () => {
+          const id = row.dataset.id;
+          const container = containers.find(c => c.id === id);
+          if (container) showDetail(id, container);
+        });
+      });
+
+      updateStats(containers);
+    }
+
+    function updateStats(containers) {
+      const running = containers.filter(c => c.state === "running").length;
+      const pending = containers.filter(c => c.state === "pending").length;
+      const stopped = containers.filter(c => c.state === "stopped" || c.state === "deleted").length;
+      
+      document.getElementById("running-count")!.textContent = running.toString();
+      document.getElementById("pending-count")!.textContent = pending.toString();
+      document.getElementById("stopped-count")!.textContent = stopped.toString();
+      document.getElementById("total-count")!.textContent = containers.length.toString();
+    }
+
+    function showDetail(id, container) {
+      document.getElementById("container-detail")!.classList.remove("hidden");
+      document.getElementById("detail-title")!.textContent = "컨테이너 상세: " + id.slice(0,12) + "...";
+      
+      const content = document.getElementById("detail-content");
+      content.innerHTML = `
+        <div><strong>ID</strong><p class="font-mono text-sm">${id}</p></div>
+        <div><strong>상태</strong><p>${container.state}</p></div>
+        <div><strong>인스턴스 타입</strong><p>${container.instance_type}</p></div>
+        <div><strong>IP 주소</strong><p class="font-mono">${container.ip || "-"}</p></div>
+        <div><strong>포트</strong><p>${container.port || "-"}</p></div>
+        <div><strong>구독 ID</strong><p class="font-mono text-sm">${container.subscription_id?.slice(0,12)}...</p></div>
+        <div><strong>생성일</strong><p>${container.created_at ? new Date(container.created_at).toLocaleString("ko-KR") : "-"}</p></div>
+        <div><strong>마지막 하트비트</strong><p>${container.last_heartbeat_at ? new Date(container.last_heartbeat_at).toLocaleString("ko-KR") : "-"}</p></div>
+      `;
+
+      const actions = document.getElementById("detail-actions");
+      actions.innerHTML = `
+        ${container.state === "running" ? '<button class="action-btn px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50" data-action="stop">중지</button>' : ""}
+        ${container.state === "stopped" ? '<button class="action-btn px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700" data-action="start">시작</button>' : ""}
+        ${container.state === "sleeping" ? '<button class="action-btn px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700" data-action="wake">깨우기</button>' : ""}
+        <button class="action-btn px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50" data-action="logs">로그 보기</button>
+        <button class="action-btn px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50" data-action="metrics">메트릭</button>
+      `;
+
+      actions.querySelectorAll(".action-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const action = btn.dataset.action;
+          if (action === "stop") await containerAction(id, "suspend");
+          else if (action === "start") await containerAction(id, "resume");
+          else if (action === "wake") await containerAction(id, "resume");
+          else if (action === "logs") window.open("/dashboard/containers/" + id + "/logs", "_blank");
+          else if (action === "metrics") window.open("/dashboard/containers/" + id + "/metrics", "_blank");
+        });
+      });
+    }
+
+    async function containerAction(id, action) {
+      try {
+        const res = await fetch("/api/containers/" + id + "/" + action, {
+          method: "POST",
+          headers: { "X-CSRF-Token": (window as any).csrfToken },
+          credentials: "include"
+        });
+        if (res.ok) {
+          alert(action + " 요청이 전송되었습니다.");
+          loadContainers();
+          document.getElementById("container-detail")!.classList.add("hidden");
+        } else {
+          alert("실패: " + (await res.json()).error);
+        }
+      } catch {
+        alert("네트워크 오류");
+      }
+    }
+
+    document.getElementById("refresh-btn")?.addEventListener("click", loadContainers);
+    document.getElementById("status-filter")?.addEventListener("change", () => loadContainers());
+    document.getElementById("close-detail")?.addEventListener("click", () => {
+      document.getElementById("container-detail")!.classList.add("hidden");
+    });
+
+    loadContainers();
+  </script>
+</Layout>

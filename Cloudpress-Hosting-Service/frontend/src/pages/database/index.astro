@@ -1,0 +1,157 @@
+---
+import Layout from "../../layouts/Layout.astro";
+---
+
+<Layout title="데이터베이스 관리 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">관리형 데이터베이스</h1>
+      <div class="flex gap-3">
+        <button id="create-db-btn" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors">+ 데이터베이스 생성</button>
+        <button id="refresh-btn" class="bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 px-4 py-2 rounded-lg font-medium transition-colors">새로고침</button>
+      </div>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-3">
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">총 데이터베이스</p>
+        <p class="text-3xl font-bold text-primary mt-1" id="total-dbs">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">리드 레플리카</p>
+        <p class="text-3xl font-bold text-green-600 dark:text-green-400 mt-1" id="replicas-count">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">PITR 스냅샷</p>
+        <p class="text-3xl font-bold text-purple-600 dark:text-purple-400 mt-1" id="pitr-count">-</p>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">데이터베이스 목록</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead class="bg-gray-50 dark:bg-slate-800/50">
+            <tr class="text-left text-sm text-gray-500 dark:text-gray-400">
+              <th class="px-6 py-3">이름</th>
+              <th class="px-6 py-3">엔진</th>
+              <th class="px-6 py-3">공급자</th>
+              <th class="px-6 py-3">상태</th>
+              <th class="px-6 py-3">스토리지</th>
+              <th class="px-6 py-3">최근 백업</th>
+              <th class="px-6 py-3">액션</th>
+            </tr>
+          </thead>
+          <tbody id="dbs-table" class="divide-y divide-gray-200 dark:divide-slate-800">
+            <tr><td colspan="7" class="px-6 py-12 text-center text-gray-500">불러오는 중...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    async function loadDatabases() {
+      try {
+        const res = await fetch("/api/databases", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          renderDatabases(data.databases || []);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderDatabases(dbs) {
+      const tbody = document.getElementById("dbs-table");
+      document.getElementById("total-dbs")!.textContent = dbs.length.toString();
+      document.getElementById("replicas-count")!.textContent = dbs.reduce((sum, d) => sum + (d.replicas?.length || 0), 0).toString();
+      document.getElementById("pitr-count")!.textContent = dbs.reduce((sum, d) => sum + (d.pitrSnapshots?.length || 0), 0).toString();
+
+      if (dbs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-6 py-12 text-center text-gray-500">데이터베이스가 없습니다.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = dbs.map(d => `
+        <tr class="hover:bg-gray-50 dark:hover:bg-slate-800/50">
+          <td class="px-6 py-4 font-medium">${d.id.slice(0,12)}...</td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">${d.engine}</span>
+          </td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-800">${d.provider}</span>
+          </td>
+          <td class="px-6 py-4">
+            <span class="px-2 py-1 text-xs font-medium rounded-full ${d.state === "ready" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}">${d.state}</span>
+          </td>
+          <td class="px-6 py-4 text-sm">${d.storage_limit_gb} GB</td>
+          <td class="px-6 py-4 text-sm">${d.last_backup_at ? new Date(d.last_backup_at).toLocaleDateString("ko-KR") : "없음"}</td>
+          <td class="px-6 py-4">
+            <button class="action-btn text-primary hover:underline text-sm" data-action="detail" data-id="${d.id}">상세</button>
+            <button class="action-btn text-green-600 hover:underline text-sm ml-2" data-action="backup" data-id="${d.id}">백업</button>
+            <button class="action-btn text-blue-600 hover:underline text-sm ml-2" data-action="replica" data-id="${d.id}">레플리카</button>
+          </td>
+        </tr>
+      `).join("");
+
+      document.querySelectorAll("#dbs-table .action-btn").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const action = btn.dataset.action;
+          const id = btn.dataset.id;
+          if (action === "backup") triggerBackup(id);
+          else if (action === "replica") createReplica(id);
+        });
+      });
+    }
+
+    async function triggerBackup(id) {
+      if (confirm("전체 백업을 시작하시겠습니까?")) {
+        try {
+          const res = await fetch("/api/databases/" + id + "/backup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": (window as any).csrfToken },
+            credentials: "include",
+            body: JSON.stringify({ kind: "full" })
+          });
+          if (res.ok) alert("백업이 시작되었습니다.");
+        } catch { alert("실패"); }
+      }
+    }
+
+    async function createReplica(id) {
+      const type = prompt("레플리카 타입 (sync/async):", "async");
+      if (type) {
+        try {
+          const res = await fetch("/api/databases/" + id + "/replicas", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": (window as any).csrfToken },
+            credentials: "include",
+            body: JSON.stringify({ replicaType: type })
+          });
+          if (res.ok) { alert("레플리카 생성 시작"); loadDatabases(); }
+        } catch { alert("실패"); }
+      }
+    }
+
+    document.getElementById("refresh-btn")?.addEventListener("click", loadDatabases);
+    document.getElementById("create-db-btn")?.addEventListener("click", () => {
+      const engine = prompt("엔진 (mariadb/postgres):");
+      const provider = prompt("공급자 (cloudb_container/supabase):");
+      if (engine && provider) {
+        fetch("/api/databases", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": (window as any).csrfToken },
+          credentials: "include",
+          body: JSON.stringify({ engine, provider })
+        }).then(() => loadDatabases());
+      }
+    });
+
+    loadDatabases();
+  </script>
+</Layout>

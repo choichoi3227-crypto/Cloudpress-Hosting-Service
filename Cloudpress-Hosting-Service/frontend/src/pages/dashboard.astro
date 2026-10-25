@@ -1,0 +1,75 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="대시보드 - CloudPress">
+  <div class="space-y-8">
+    <div class="flex items-center justify-between">
+      <h1 class="text-3xl font-bold text-gray-900 dark:text-white">대시보드</h1>
+      <div class="flex gap-3">
+        <a href="/dashboard/services/create" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+          새 서비스 생성
+        </a>
+      </div>
+    </div>
+
+    <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">활성 서비스</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="active-services">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">월 예상 요금</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="monthly-cost">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">등록된 도메인</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="domain-count">-</p>
+      </div>
+      <div class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-gray-200 dark:border-slate-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400">스토리지 사용량</p>
+        <p class="text-3xl font-bold text-gray-900 dark:text-white mt-1" id="storage-usage">-</p>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">내 서비스</h2>
+        <a href="/dashboard/services" class="text-sm text-primary hover:underline">전체 보기</a>
+      </div>
+      <div class="p-6" id="services-list">
+        <div class="text-center py-12 text-gray-500">서비스를 불러오는 중...</div>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">최근 청구서</h2>
+        <a href="/dashboard/billing" class="text-sm text-primary hover:underline">전체 보기</a>
+      </div>
+      <div class="p-6" id="invoices-list">
+        <div class="text-center py-12 text-gray-500">청구서를 불러오는 중...</div>
+      </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">컨테이너 인스턴스</h2>
+        <span class="px-2 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">출시 예정</span>
+      </div>
+      <div class="p-6">
+        <div class="text-center py-12">
+          <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+          </svg>
+          <p class="mt-4 text-gray-500 dark:text-gray-400">컨테이너 관리 기능은 준비 중입니다.</p>
+          <p class="mt-2 text-sm text-gray-400">Cloudflare Containers 기반의 고성능 격리 환경을 곧 제공합니다.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { loadDashboard } from '../scripts/dashboard.ts';
+  </script>
+</Layout>
