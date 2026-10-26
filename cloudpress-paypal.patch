@@ -1,0 +1,2227 @@
+diff --git a/.env.example b/.env.example
+index 8a5a10b..d1df0e0 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,11 +1,12 @@
+ # 개발용 예시. 실제 값은 `wrangler secret put` 으로만 등록하고 절대 커밋하지 않는다.
+ CLOUDPRESS_MODE=mock            # mock | live
+-STRIPE_SECRET_KEY=
+-STRIPE_WEBHOOK_SECRET=
++PAYPAL_CLIENT_ID=               # PayPal 앱(REST) Client ID
++PAYPAL_CLIENT_SECRET=           # PayPal 앱 Secret. wrangler secret 으로만 등록
++PAYPAL_WEBHOOK_ID=              # PayPal 개발자 대시보드에서 웹훅 등록 후 발급되는 ID(서명 검증에 필요)
++PAYPAL_ENV=sandbox              # sandbox | live (운영 전환 시 live)
+ CLOUDFLARE_API_TOKEN=
+ SUPABASE_MANAGEMENT_TOKEN=
+ SECRETS_ENCRYPTION_KEY=
+ NEON_API_KEY=                   # PostgreSQL(Neon) 프로젝트 생성용. 최소 권한 키 사용
+ SUPABASE_MANAGEMENT_TOKEN=      # PostgreSQL(Supabase) 프로젝트 생성용(재판매 약관 확인 후)
+ CLOUDFLARE_ACCOUNT_ID=          # 32자리 계정 ID. 토큰은 최소 권한(Registrar 쓰기, Zone/DNS/설정 편집)으로 분리해 발급
+-STRIPE_API_VERSION=             # 운영자가 확인해 고정한 Stripe API 버전(비우면 계정 기본 버전)
+diff --git a/docs/PAYPAL.md b/docs/PAYPAL.md
+new file mode 100644
+index 0000000..5a70163
+--- /dev/null
++++ b/docs/PAYPAL.md
+@@ -0,0 +1,29 @@
++# PayPal 결제 전환 안내 (Stripe 대체)
++
++결제는 100% PayPal 로 처리한다. Stripe 코드는 제거했다(과거 데이터 보존을 위해 DB 의 `stripe_*` 컬럼만 남김).
++
++## 방식
++| 항목 | 구현 |
++|---|---|
++| 월 구독 | PayPal Subscriptions API(Plan → Subscription). 가격 버전마다 별도 Plan 을 만들어 기존 구독 가격이 바뀌지 않는다 |
++| 결제 확정 | **웹훅(`PAYMENT.SALE.COMPLETED`)으로만** 확정. 리턴 URL 쿼리값은 믿지 않는다 |
++| 도메인(일회성) | Orders API v2. 리턴 시 서버가 캡처하고 금액·주문을 재검증, 웹훅(`PAYMENT.CAPTURE.COMPLETED`)이 같은 처리를 멱등하게 수행 |
++| 서명 검증 | PayPal `verify-webhook-signature` API (`PAYPAL_WEBHOOK_ID` 필요) |
++| 환불 | Payments v2 `captures/{id}/refund`, 환불·분쟁 웹훅이 DB 에 반영 |
++| 취소 | PayPal 구독 해지(다음 결제 중단) + 이미 결제한 기간은 유지(`canceling`) → 기간 종료 시 스케줄러가 `canceled` 확정 |
++| 고객 포털 | PayPal 에는 없음 → PayPal 계정의 자동결제 관리 페이지로 안내 |
++
++## 웹훅 등록
++PayPal 개발자 대시보드 → 앱 → Webhooks → `https://<도메인>/api/webhooks/paypal`, 이벤트:
++`BILLING.SUBSCRIPTION.ACTIVATED / SUSPENDED / CANCELLED / EXPIRED / PAYMENT.FAILED`, `PAYMENT.SALE.COMPLETED / REFUNDED / REVERSED`, `PAYMENT.CAPTURE.COMPLETED / REFUNDED / REVERSED`, `CUSTOMER.DISPUTE.CREATED`.
++발급된 Webhook ID 를 `PAYPAL_WEBHOOK_ID` 로 등록한다.
++
++## 반드시 알아야 할 제약 (공식 안내 확인)
++1. **KRW 결제 불가** — PayPal 결제 통화에 KRW 가 없어 USD 만 받는다. 환율 기반 원화 가격 기능은 결제에서 쓰지 않는다.
++2. **한국 계정은 한국 밖 구매자만** — 한국에 등록된 PayPal 계정은 한국 국내 구매자의 결제를 받을 수 없다. 한국 고객 대상 서비스라면 사실상 판매가 막힌다. 국내 고객이 목표면 국내 PG 병행이 필요하다.
++3. **제휴 수수료 지급** — Stripe Connect 가 없다. PayPal Payouts(별도 신청·승인 필요)로 지급해야 하며 아직 구현하지 않았다. 지급 승인 후 수동 송금이 현재 안전한 방법이다.
++4. **수수료 가정치** — `domainPricing.ts` 의 4.4% + $0.30 은 추정값이다. 실제 계약 수수료로 조정할 것.
++5. 구독 이용 기간은 결제 시각 기준 +1개월(UTC)로 기록한다. PayPal 의 다음 결제일과 며칠 어긋날 수 있다.
++
++## 필요한 Secrets
++`PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID` (+ `PAYPAL_ENV=sandbox|live`). 마이그레이션 `0010_paypal.sql` 적용 필요.
+diff --git a/frontend/src/pages/billing.astro b/frontend/src/pages/billing.astro
+index c7df2b7..6829fa3 100644
+--- a/frontend/src/pages/billing.astro
++++ b/frontend/src/pages/billing.astro
+@@ -6,7 +6,7 @@ import Layout from '../layouts/Layout.astro';
+   <div class="space-y-8">
+     <div class="flex items-center justify-between">
+       <h1 class="text-3xl font-bold text-gray-900 dark:text-white">청구 및 결제</h1>
+-      <a href="/billing/portal" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" target="_blank">Stripe 고객 포털</a>
++      <button type="button" data-paypal-manage class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" >PayPal 고객 포털</button>
+     </div>
+ 
+     <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
+@@ -14,8 +14,8 @@ import Layout from '../layouts/Layout.astro';
+         <h2 class="text-lg font-semibold">결제 수단 관리</h2>
+       </div>
+       <div class="p-6">
+-        <p class="text-gray-600 dark:text-gray-400 mb-4">Stripe 고객 포털에서 결제 수단을 관리하세요.</p>
+-        <a href="/billing/portal" class="bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block" target="_blank">고객 포털 열기</a>
++        <p class="text-gray-600 dark:text-gray-400 mb-4">PayPal 고객 포털에서 결제 수단을 관리하세요.</p>
++        <button type="button" data-paypal-manage class="bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block" >고객 포털 열기</button>
+       </div>
+     </div>
+ 
+diff --git a/frontend/src/pages/services/[id].astro b/frontend/src/pages/services/[id].astro
+index 9002d5f..254a7bf 100644
+--- a/frontend/src/pages/services/[id].astro
++++ b/frontend/src/pages/services/[id].astro
+@@ -74,7 +74,7 @@ const { id } = Astro.params;
+             <h2 class="text-lg font-semibold">작업</h2>
+           </div>
+           <div class="p-6 space-y-4">
+-            <a href="/billing/portal" target="_blank" class="w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">결제 수단 관리 (Stripe 포털)</a>
++            <button type="button" data-paypal-manage  class="w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">결제 수단 관리 (PayPal 포털)</button>
+             <a href="/services" class="w-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">서비스 목록으로 돌아가기</a>
+           </div>
+         </div>
+diff --git a/frontend/src/pages/services/create.astro b/frontend/src/pages/services/create.astro
+index f764ad0..d7094c0 100644
+--- a/frontend/src/pages/services/create.astro
++++ b/frontend/src/pages/services/create.astro
+@@ -23,11 +23,9 @@ import Layout from "../../layouts/Layout.astro";
+ 
+       <div class="grid gap-6 md:grid-cols-2">
+         <div>
+-          <label for="currency" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">결제 통화</label>
+-          <select name="currency" id="currency" class="w-full px-4 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white">
+-            <option value="USD">USD (미국 달러)</option>
+-            <option value="KRW">KRW (원화, 환율 적용)</option>
+-          </select>
++          <p class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">결제 수단 / 통화</p>
++          <p class="px-4 py-2 text-gray-700 dark:text-gray-300">PayPal · USD</p>
++          <input type="hidden" id="currency" value="USD" />
+         </div>
+         <div>
+           <p class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">구독 주기</p>
+@@ -45,7 +43,7 @@ import Layout from "../../layouts/Layout.astro";
+ 
+       <div class="flex gap-3 pt-4 border-t border-gray-200 dark:border-slate-800">
+         <button type="submit" id="create-btn" class="bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors flex-1">
+-          결제하고 서비스 생성
++          PayPal로 결제하고 서비스 생성
+         </button>
+         <a href="/services" class="bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 px-6 py-3 rounded-lg font-medium transition-colors flex-1 text-center">
+           취소
+@@ -95,13 +93,13 @@ import Layout from "../../layouts/Layout.astro";
+       const err = document.getElementById("create-error")!;
+       const btn = document.getElementById("create-btn") as HTMLButtonElement;
+       err.classList.add("hidden");
+-      btn.disabled = true; btn.textContent = "결제 페이지로 이동 중...";
++      btn.disabled = true; btn.textContent = "PayPal로 이동 중...";
+       try {
+         const res = await fetch("/api/subscriptions", {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+           credentials: "include",
+-          body: JSON.stringify({ productId: prodSel.value, currency: (document.getElementById("currency") as HTMLSelectElement).value })
++          body: JSON.stringify({ productId: prodSel.value, currency: "USD" })
+         });
+         const data = await res.json();
+         if (res.ok && data.url) { window.location.href = data.url; return; }
+@@ -111,7 +109,7 @@ import Layout from "../../layouts/Layout.astro";
+         err.textContent = "네트워크 오류가 발생했습니다.";
+         err.classList.remove("hidden");
+       }
+-      btn.disabled = false; btn.textContent = "결제하고 서비스 생성";
++      btn.disabled = false; btn.textContent = "PayPal로 결제하고 서비스 생성";
+     });
+ 
+     loadPlans();
+diff --git a/frontend/src/scripts/session.ts b/frontend/src/scripts/session.ts
+index 0c27cf9..ec874f0 100644
+--- a/frontend/src/scripts/session.ts
++++ b/frontend/src/scripts/session.ts
+@@ -60,3 +60,15 @@ export async function initSession(): Promise<void> {
+ }
+ 
+ initSession();
++
++// PayPal 에는 자체 고객 포털이 없어 PayPal 계정의 자동결제 관리 페이지로 보낸다.
++document.addEventListener('click', async (e) => {
++  const btn = (e.target as HTMLElement | null)?.closest('[data-paypal-manage]');
++  if (!btn) return;
++  e.preventDefault();
++  try {
++    const res = await fetch('/api/billing/portal', { method: 'POST', credentials: 'include' });
++    const data = await res.json() as { url?: string };
++    if (data.url) window.open(data.url, '_blank', 'noopener');
++  } catch { alert('PayPal 페이지를 열지 못했습니다. 잠시 후 다시 시도하세요.'); }
++});
+diff --git a/migrations/0010_paypal.sql b/migrations/0010_paypal.sql
+new file mode 100644
+index 0000000..581238e
+--- /dev/null
++++ b/migrations/0010_paypal.sql
+@@ -0,0 +1,26 @@
++-- 0010: 결제 사업자를 Stripe 에서 PayPal 로 전환.
++-- 기존 stripe_* 컬럼은 과거 데이터 보존을 위해 남기고(삭제하지 않음), PayPal 식별자 컬럼을 추가한다.
++-- 참고: domain_orders.stripe_payment_intent_id 는 이름이 남아 있지만 이제 "외부 결제 참조(PayPal capture id)"로 쓴다.
++--       payments.rail 의 CHECK 제약(stripe|x402)은 ALTER 로 바꿀 수 없어 그대로 두고, 결제 사업자는 provider 컬럼으로 구분한다.
++
++ALTER TABLE subscriptions ADD COLUMN paypal_plan_id TEXT;
++ALTER TABLE subscriptions ADD COLUMN paypal_subscription_id TEXT;
++CREATE UNIQUE INDEX IF NOT EXISTS uq_sub_paypal ON subscriptions(paypal_subscription_id) WHERE paypal_subscription_id IS NOT NULL;
++
++ALTER TABLE price_amounts ADD COLUMN paypal_plan_id TEXT;
++CREATE UNIQUE INDEX IF NOT EXISTS uq_price_amounts_paypal ON price_amounts(paypal_plan_id) WHERE paypal_plan_id IS NOT NULL;
++
++ALTER TABLE invoices ADD COLUMN paypal_sale_id TEXT;
++CREATE UNIQUE INDEX IF NOT EXISTS uq_inv_paypal ON invoices(paypal_sale_id) WHERE paypal_sale_id IS NOT NULL;
++
++ALTER TABLE payments ADD COLUMN provider TEXT NOT NULL DEFAULT 'stripe';
++ALTER TABLE payments ADD COLUMN paypal_capture_id TEXT;
++CREATE UNIQUE INDEX IF NOT EXISTS uq_pay_paypal ON payments(paypal_capture_id) WHERE paypal_capture_id IS NOT NULL;
++
++ALTER TABLE refunds ADD COLUMN paypal_refund_id TEXT;
++CREATE UNIQUE INDEX IF NOT EXISTS uq_ref_paypal ON refunds(paypal_refund_id) WHERE paypal_refund_id IS NOT NULL;
++
++ALTER TABLE domain_orders ADD COLUMN paypal_order_id TEXT;
++CREATE UNIQUE INDEX IF NOT EXISTS uq_dom_paypal_order ON domain_orders(paypal_order_id) WHERE paypal_order_id IS NOT NULL;
++
++ALTER TABLE webhook_events ADD COLUMN provider TEXT NOT NULL DEFAULT 'stripe';
+diff --git a/src/api.ts b/src/api.ts
+index 1c0e5a5..2fa0b0b 100644
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -4,6 +4,7 @@ import { verifyPassword } from "./lib/crypto";
+ import type { Env } from "./worker";
+ import { buildRuntime } from "./runtime";
+ import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
++import { applyDomainCapture } from "./lib/webhooks";
+ import { parseCurrency, latestFxRate } from "./lib/currency";
+ import { recordFxSample } from "./lib/fxStore";
+ import { ServiceError, connectDomain } from "./lib/zoneService";
+@@ -64,7 +65,7 @@ const subOut = (r: any) => ({
+ });
+ 
+ add("GET", "/api/subscriptions", async (c) => {
+-  // 결제 전(incomplete) 구독은 목록에서 숨긴다. 결제 완료는 Stripe 웹훅으로만 확정된다.
++  // 결제 전(incomplete) 구독은 목록에서 숨긴다. 결제 완료는 PayPal 웹훅으로만 확정된다.
+   const rows = await all(c.env.DB, `${subSelect} WHERE s.customer_id = ? AND s.status NOT IN ('incomplete') ORDER BY s.created_at DESC`, c.session.user.id);
+   return c.json(rows.map(subOut));
+ });
+@@ -75,7 +76,7 @@ add("POST", "/api/subscriptions", async (c) => {
+   let cur;
+   try { cur = parseCurrency(b.currency ?? "USD"); } catch { return c.json({ error: "bad_currency" }, 400); }
+   const rt = buildRuntime(c.env);
+-  const r = await createSubscriptionCheckout(c.env.DB, rt.stripe, c.session.user.id, b.productId, cur, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now, fxRateMicro: await fxOf(c.env.DB) });
++  const r = await createSubscriptionCheckout(c.env.DB, rt.paypal, c.session.user.id, b.productId, cur, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now });
+   return c.json({ ok: true, subscriptionId: r.subscriptionId, url: r.url }, 201);
+ });
+ 
+@@ -84,28 +85,60 @@ add("GET", "/api/subscriptions/:id", async (c, m) => {
+   return r ? c.json(subOut(r)) : c.json({ error: "not_found" }, 404);
+ });
+ 
+-// 취소는 현재 결제 기간 종료 시점부터 적용한다(추가 CPU 취소 정책과 동일). 즉시 환불은 하지 않는다.
++// 취소: PayPal 구독을 해지해 다음 결제를 막고, 이미 결제한 이용 기간은 끝까지 유지한다(canceling → 기간 종료 시 canceled).
++// 즉시 환불은 하지 않는다.
+ add("POST", "/api/services/:id/cancel", async (c, m) => {
+-  const s = await one<{ id: string; status: string }>(c.env.DB, "SELECT id, status FROM subscriptions WHERE id = ? AND customer_id = ?", m[1], c.session.user.id);
++  const s = await one<{ id: string; status: string; pp: string | null }>(c.env.DB, "SELECT id, status, paypal_subscription_id AS pp FROM subscriptions WHERE id = ? AND customer_id = ?", m[1], c.session.user.id);
+   if (!s) return c.json({ error: "not_found" }, 404);
+   if (!["active", "past_due", "suspended"].includes(s.status)) return c.json({ error: "bad_state", message: "취소할 수 없는 상태입니다." }, 409);
++  if (s.pp) {
++    try { await buildRuntime(c.env).paypal.cancelSubscription(s.pp, "고객 요청에 의한 취소"); }
++    catch (e: any) { return c.json({ error: "paypal_error", message: "PayPal 구독 해지에 실패했습니다. 잠시 후 다시 시도하세요." }, e?.retryable ? 503 : 502); }
++  }
+   await c.env.DB.prepare("UPDATE subscriptions SET cancel_at_period_end = 1, status = 'canceling', updated_at = ? WHERE id = ?").bind(nowIso(c.now), s.id).run();
+   await audit(c.env.DB, { actorId: c.session.user.id, action: "subscription.cancel", targetType: "subscription", targetId: s.id }, c.now);
+   return c.json({ ok: true, cancelAtPeriodEnd: true });
+ });
+ 
++// 정지/재개는 PayPal 구독의 청구도 함께 멈추거나 재개한다(정지 중 과금 방지).
+ for (const [action, from, to] of [["suspend", "active", "suspended"], ["resume", "suspended", "active"]] as const) {
+   add("POST", `/api/services/:id/${action}`, async (c, m) => {
+-    const r = await c.env.DB.prepare("UPDATE subscriptions SET status = ?, updated_at = ? WHERE id = ? AND customer_id = ? AND status = ?").bind(to, nowIso(c.now), m[1], c.session.user.id, from).run();
+-    if (r.meta.changes === 0) return c.json({ error: "bad_state", message: "현재 상태에서는 실행할 수 없습니다." }, 409);
+-    await audit(c.env.DB, { actorId: c.session.user.id, action: `subscription.${action}`, targetType: "subscription", targetId: m[1] }, c.now);
++    const s = await one<{ id: string; pp: string | null }>(c.env.DB, "SELECT id, paypal_subscription_id AS pp FROM subscriptions WHERE id = ? AND customer_id = ? AND status = ?", m[1], c.session.user.id, from);
++    if (!s) return c.json({ error: "bad_state", message: "현재 상태에서는 실행할 수 없습니다." }, 409);
++    if (s.pp) {
++      try { const pp = buildRuntime(c.env).paypal; await (action === "suspend" ? pp.suspendSubscription(s.pp, "고객 요청 정지") : pp.activateSubscription(s.pp, "고객 요청 재개")); }
++      catch (e: any) { return c.json({ error: "paypal_error", message: "PayPal 처리에 실패했습니다. 잠시 후 다시 시도하세요." }, e?.retryable ? 503 : 502); }
++    }
++    await c.env.DB.prepare("UPDATE subscriptions SET status = ?, updated_at = ? WHERE id = ? AND status = ?").bind(to, nowIso(c.now), s.id, from).run();
++    await audit(c.env.DB, { actorId: c.session.user.id, action: `subscription.${action}`, targetType: "subscription", targetId: s.id }, c.now);
+     return c.json({ ok: true });
+   });
+ }
+ 
++// PayPal 승인 후 구매자가 돌아오는 주소. 도메인(일회성) 주문은 여기서 서버가 캡처하고, 결제 확정은 금액·주문을 서버에서 다시 검증한다.
++// (구독은 웹훅으로만 확정한다. 이 주소의 쿼리값만으로 결제 완료를 믿지 않는다.)
++add("GET", "/api/paypal/return", async (c) => {
++  const kind = c.url.searchParams.get("kind");
++  const orderId = c.url.searchParams.get("order");
++  const token = c.url.searchParams.get("token"); // PayPal 주문 ID
++  const redirect = (to: string) => new Response(null, { status: 302, headers: { Location: `${c.env.APP_ORIGIN}${to}` } });
++  if (kind !== "domain" || !orderId || !token) return redirect("/dashboard");
++  const o = await one<{ id: string; paypal_order_id: string | null; status: string }>(c.env.DB, "SELECT id, paypal_order_id, status FROM domain_orders WHERE id = ? AND customer_id = ?", orderId, c.session.user.id);
++  if (!o || o.paypal_order_id !== token) return redirect("/domains?checkout=invalid");
++  if (o.status !== "awaiting_payment") return redirect("/domains?checkout=done");
++  try {
++    const cap = await buildRuntime(c.env).paypal.captureOrder(token, `capture:${o.id}`);
++    if (cap.status !== "COMPLETED") return redirect("/domains?checkout=pending");
++    await applyDomainCapture(c.env.DB, o.id, cap.captureId, cap.currency, cap.amountMinor, c.now);
++    return redirect("/domains?checkout=success");
++  } catch {
++    return redirect("/domains?checkout=error"); // 캡처가 실제로 됐다면 PAYMENT.CAPTURE.COMPLETED 웹훅이 같은 처리를 멱등하게 수행한다.
++  }
++});
++
+ add("POST", "/api/billing/portal", async (c) => {
+   const rt = buildRuntime(c.env);
+-  return c.json(await createPortal(c.env.DB, rt.stripe, c.session.user.id, c.env.APP_ORIGIN));
++  return c.json(await createPortal(c.env.DB, rt.paypal, c.session.user.id, c.env.APP_ORIGIN, rt.paypalEnv));
+ });
+ 
+ /* ───────────── 청구 ───────────── */
+@@ -199,7 +232,7 @@ add("POST", "/api/domains/quote", async (c) => {
+ 
+ add("POST", "/api/domains/orders/:id/checkout", async (c, m) => {
+   const rt = buildRuntime(c.env);
+-  return c.json(await createDomainCheckout(c.env.DB, rt.stripe, c.session.user.id, m[1]!, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now, fxRateMicro: await fxOf(c.env.DB) }));
++  return c.json(await createDomainCheckout(c.env.DB, rt.paypal, c.session.user.id, m[1]!, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now }));
+ });
+ 
+ /* ───────────── 컨테이너 · 데이터베이스 (고객 소유 자원) ───────────── */
+diff --git a/src/lib/checkout.ts b/src/lib/checkout.ts
+index 4e725a5..33e2acd 100644
+--- a/src/lib/checkout.ts
++++ b/src/lib/checkout.ts
+@@ -1,88 +1,92 @@
+ import { type D1Like, newId, nowIso } from "./db";
+-import type { StripePort } from "./stripe.client";
++import type { PayPalPort } from "./paypal.client";
+ import type { Cur } from "./currency";
+-import { usdMicroToWon } from "./fx";
+ import { ServiceError } from "./zoneService";
+ import { audit } from "./auth";
+ 
+-const ceilTo = (v: number, unit: number) => Math.ceil(v / unit) * unit;
+-export const KRW_LIST_ROUNDING = 100;
+-
+-/** Stripe 고객은 사용자당 1명. 멱등 키로 동시 요청에서도 중복 생성을 막는다. */
+-export async function ensureStripeCustomer(db: D1Like, stripe: StripePort, userId: string): Promise<string> {
+-  const u = await db.prepare("SELECT email, stripe_customer_id AS c FROM users WHERE id = ?").bind(userId).first<{ email: string; c: string | null }>();
+-  if (!u) throw new ServiceError("not_found", "사용자 없음");
+-  if (u.c) return u.c;
+-  const c = await stripe.createCustomer({ email: u.email, metadata: { cloudpress_user_id: userId } }, `customer:${userId}`);
+-  await db.prepare("UPDATE users SET stripe_customer_id = COALESCE(stripe_customer_id, ?) WHERE id = ?").bind(c.id, userId).run();
+-  return (await db.prepare("SELECT stripe_customer_id AS c FROM users WHERE id = ?").bind(userId).first<{ c: string }>())!.c;
+-}
+-
+ /**
+- * 가격 버전 × 통화의 Stripe Price 를 보장한다. 한 번 만든 금액은 바꾸지 않는다(가격 버전 보존).
+- * KRW 는 최초 생성 시점의 환율로 목록가(100원 올림)를 확정해 잠근다. 환율이 바뀌어도 기존 구독 가격은 유지되고, 새 가격은 새 가격 버전으로 낸다.
++ * PayPal 은 KRW 를 지원하지 않는다(공식 지원 통화 목록에 없음). 따라서 결제는 USD 만 허용한다.
++ * 한국에 등록된 PayPal 계정은 한국 밖 구매자의 결제만 받을 수 있다는 점도 운영자가 알아야 한다(docs/PAYPAL.md).
+  */
+-export async function ensureStripePrice(db: D1Like, stripe: StripePort, priceId: string, currency: Cur, fxRateMicro: number | null, nowMs: number): Promise<{ stripePriceId: string; amountMinor: number }> {
+-  const existing = await db.prepare("SELECT amount_minor AS a, stripe_price_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string | null }>();
+-  if (existing?.s) return { stripePriceId: existing.s, amountMinor: existing.a };
++export function assertPayPalCurrency(currency: Cur): void {
++  if (currency !== "USD") throw new ServiceError("currency_unsupported", "PayPal 결제는 USD 만 지원합니다.");
++}
++
++/** 가격 버전 × USD → PayPal 월 구독 플랜. 한 번 만들면 재사용한다(가격 버전이 바뀌면 새 플랜 = 기존 구독 가격 유지). */
++export async function ensurePayPalPlan(db: D1Like, paypal: PayPalPort, priceId: string, currency: Cur, nowMs: number): Promise<{ paypalPlanId: string; amountMinor: number }> {
++  assertPayPalCurrency(currency);
++  const existing = await db.prepare("SELECT amount_minor AS a, paypal_plan_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string | null }>();
++  if (existing?.s) return { paypalPlanId: existing.s, amountMinor: existing.a };
+   const p = await db.prepare("SELECT p.monthly_micro AS m, p.product_id AS pid, pr.name_ko AS name FROM prices p JOIN products pr ON pr.id = p.product_id WHERE p.id = ?").bind(priceId).first<{ m: number; pid: string; name: string }>();
+   if (!p) throw new ServiceError("not_found", "가격 없음");
+-  let amountMinor: number;
+-  if (currency === "USD") {
+-    if (p.m % 10_000 !== 0) throw new ServiceError("bad_price", "USD 가격은 센트 단위여야 함");
+-    amountMinor = p.m / 10_000;
+-  } else {
+-    const locked = existing?.a;
+-    if (!locked && !fxRateMicro) throw new ServiceError("fx_unavailable", "환율을 확인할 수 없어 원화 가격을 만들 수 없음");
+-    amountMinor = locked ?? ceilTo(usdMicroToWon(p.m, fxRateMicro!), KRW_LIST_ROUNDING);
+-  }
+-  const created = await stripe.createMonthlyPrice({ name: p.name, currency, amountMinor, metadata: { cloudpress_price_id: priceId } }, `price:${priceId}:${currency}`);
+-  await db.prepare("INSERT INTO price_amounts(price_id,currency,amount_minor,fx_rate_micro,stripe_price_id,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(price_id,currency) DO UPDATE SET stripe_price_id = COALESCE(price_amounts.stripe_price_id, excluded.stripe_price_id)")
+-    .bind(priceId, currency, amountMinor, currency === "KRW" ? fxRateMicro : null, created.priceId, nowIso(nowMs)).run();
+-  const row = (await db.prepare("SELECT amount_minor AS a, stripe_price_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string }>())!;
+-  return { stripePriceId: row.s, amountMinor: row.a };
++  if (p.m % 10_000 !== 0) throw new ServiceError("bad_price", "USD 가격은 센트 단위여야 함");
++  const amountMinor = p.m / 10_000;
++  const created = await paypal.createMonthlyPlan({ name: `CloudPress ${p.name}`, currency, amountMinor, customId: priceId }, `${priceId}:${currency}`);
++  await db.prepare("INSERT INTO price_amounts(price_id,currency,amount_minor,paypal_plan_id,created_at) VALUES(?,?,?,?,?) ON CONFLICT(price_id,currency) DO UPDATE SET paypal_plan_id = COALESCE(price_amounts.paypal_plan_id, excluded.paypal_plan_id)")
++    .bind(priceId, currency, amountMinor, created.planId, nowIso(nowMs)).run();
++  const row = (await db.prepare("SELECT amount_minor AS a, paypal_plan_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string }>())!;
++  return { paypalPlanId: row.s, amountMinor: row.a };
+ }
+ 
+-export interface CheckoutCtx { appOrigin: string; nowMs: number; fxRateMicro: number | null }
++export interface CheckoutCtx { appOrigin: string; nowMs: number; fxRateMicro?: number | null }
+ 
+-/** 서비스별 독립 구독: 구독 행(incomplete)을 만들고 Stripe Checkout 으로 보낸다. 활성화는 웹훅(invoice.paid)에서만. */
+-export async function createSubscriptionCheckout(db: D1Like, stripe: StripePort, userId: string, productId: string, currency: Cur, ctx: CheckoutCtx) {
++/** 구독 결제 시작: 결제 전(incomplete) 구독을 만들고 PayPal 승인 URL 을 돌려준다. 활성화는 웹훅(PAYMENT.SALE.COMPLETED)으로만 한다. */
++export async function createSubscriptionCheckout(db: D1Like, paypal: PayPalPort, userId: string, productId: string, currency: Cur, ctx: CheckoutCtx) {
++  assertPayPalCurrency(currency);
+   const prod = await db.prepare("SELECT id, on_sale FROM products WHERE id = ?").bind(productId).first<{ id: string; on_sale: number }>();
+   if (!prod || prod.on_sale !== 1) throw new ServiceError("not_for_sale", "판매 중인 상품이 아님");
+   const price = await db.prepare("SELECT id FROM prices WHERE product_id = ? AND retired_at IS NULL ORDER BY version DESC LIMIT 1").bind(productId).first<{ id: string }>();
+-  if (!price) throw new ServiceError("not_for_sale", "판매 가격이 없음");
+-  const customer = await ensureStripeCustomer(db, stripe, userId);
+-  const { stripePriceId } = await ensureStripePrice(db, stripe, price.id, currency, ctx.fxRateMicro, ctx.nowMs);
++  if (!price) throw new ServiceError("not_for_sale", "판매 가능한 가격이 없음");
++  const user = await db.prepare("SELECT email FROM users WHERE id = ?").bind(userId).first<{ email: string }>();
++  if (!user) throw new ServiceError("not_found", "사용자 없음");
++  const { paypalPlanId } = await ensurePayPalPlan(db, paypal, price.id, currency, ctx.nowMs);
+   const subId = newId("sub");
+-  await db.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,stripe_customer_id,stripe_price_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'incomplete',?,?)")
+-    .bind(subId, userId, productId, price.id, customer, stripePriceId, nowIso(ctx.nowMs), nowIso(ctx.nowMs)).run();
+-  const s = await stripe.createCheckoutSession({ mode: "subscription", customer, priceId: stripePriceId, clientReferenceId: subId, metadata: { cloudpress_subscription_id: subId }, successUrl: `${ctx.appOrigin}/dashboard?checkout=success`, cancelUrl: `${ctx.appOrigin}/dashboard?checkout=cancel` }, `checkout:sub:${subId}`);
+-  await audit(db, { actorId: userId, action: "checkout.subscription", targetType: "subscription", targetId: subId, detail: { productId, currency } }, ctx.nowMs);
+-  return { subscriptionId: subId, url: s.url };
++  // custom_id 로 우리 구독 ID 를 PayPal 에 심어 두면 웹훅에서 정확히 연결된다(최대 127자).
++  const s = await paypal.createSubscription({ planId: paypalPlanId, customId: subId, email: user.email,
++    returnUrl: `${ctx.appOrigin}/dashboard?checkout=success`, cancelUrl: `${ctx.appOrigin}/services/create?checkout=cancel` }, `sub:${subId}`);
++  await db.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,paypal_plan_id,paypal_subscription_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'incomplete',?,?)")
++    .bind(subId, userId, productId, price.id, paypalPlanId, s.id, nowIso(ctx.nowMs), nowIso(ctx.nowMs)).run();
++  await audit(db, { actorId: userId, action: "checkout.subscription", targetType: "subscription", targetId: subId, detail: { productId, currency, provider: "paypal" } }, ctx.nowMs);
++  return { subscriptionId: subId, url: s.approveUrl };
+ }
+ 
+-/** 도메인 결제: 견적이 유효하고 본인 주문일 때만. 금액·통화는 견적에 고정된 값을 그대로 사용한다(클라이언트 입력을 신뢰하지 않음). */
+-export async function createDomainCheckout(db: D1Like, stripe: StripePort, userId: string, orderId: string, ctx: CheckoutCtx) {
++/** 도메인 구매 결제: 견적이 유효할 때만 PayPal 주문(일회성)을 만든다. 결제 확정은 캡처 + 웹훅으로만 한다. */
++export async function createDomainCheckout(db: D1Like, paypal: PayPalPort, userId: string, orderId: string, ctx: CheckoutCtx) {
+   const o = await db.prepare("SELECT id,hostname,status,charge_currency AS cur,charge_amount AS amt,quote_expires_at AS exp FROM domain_orders WHERE id = ? AND customer_id = ?").bind(orderId, userId).first<{ id: string; hostname: string; status: string; cur: Cur; amt: number | null; exp: string }>();
+-  if (!o) throw new ServiceError("not_found", "주문을 찾을 수 없음");
++  if (!o) throw new ServiceError("not_found", "주문이 없거나 권한 없음");
+   if (o.status !== "awaiting_payment") throw new ServiceError("bad_state", "결제할 수 없는 주문 상태");
+   if (Date.parse(o.exp) <= ctx.nowMs) throw new ServiceError("quote_expired", "견적이 만료됨. 다시 견적을 받으세요.");
+-  if (!o.amt) throw new ServiceError("bad_price", "견적 금액이 없음");
+-  const customer = await ensureStripeCustomer(db, stripe, userId);
+-  const sec = Math.floor(ctx.nowMs / 1000) + 31 * 60; // Checkout 만료는 최소 30분. 견적이 먼저 만료돼도 결제 도착 시 원가 변동 검사를 거친다.
+-  const s = await stripe.createCheckoutSession({ mode: "payment", customer, inline: { currency: o.cur, amountMinor: o.amt, name: `도메인 등록 1년: ${o.hostname}` }, clientReferenceId: o.id, metadata: { domain_order_id: o.id }, expiresAtSec: sec, successUrl: `${ctx.appOrigin}/domains?order=${o.id}`, cancelUrl: `${ctx.appOrigin}/domains?cancel=${o.id}` }, `checkout:domain:${o.id}`);
++  if (!o.amt) throw new ServiceError("bad_price", "주문 금액이 없음");
++  assertPayPalCurrency(o.cur);
++  const ord = await paypal.createOrder({ customId: o.id, currency: o.cur, amountMinor: o.amt, description: `도메인 등록 1년: ${o.hostname}`,
++    returnUrl: `${ctx.appOrigin}/api/paypal/return?kind=domain&order=${encodeURIComponent(o.id)}`, cancelUrl: `${ctx.appOrigin}/domains?checkout=cancel` }, `domain:${o.id}`);
++  await db.prepare("UPDATE domain_orders SET paypal_order_id = ?, updated_at = ? WHERE id = ? AND status = 'awaiting_payment'").bind(ord.id, nowIso(ctx.nowMs), o.id).run();
+   await audit(db, { actorId: userId, action: "checkout.domain", targetType: "domain_order", targetId: o.id }, ctx.nowMs);
+-  return { url: s.url };
++  return { url: ord.approveUrl };
+ }
+ 
+-export async function createPortal(db: D1Like, stripe: StripePort, userId: string, appOrigin: string) {
+-  const u = await db.prepare("SELECT stripe_customer_id AS c FROM users WHERE id = ?").bind(userId).first<{ c: string | null }>();
+-  if (!u?.c) throw new ServiceError("no_customer", "결제 이력이 없어 포털을 열 수 없음");
+-  return stripe.createPortalSession({ customer: u.c, returnUrl: `${appOrigin}/dashboard` });
++/** PayPal 에는 Stripe 같은 고객 포털이 없다. 구매자가 PayPal 계정의 자동 결제 관리 페이지에서 직접 관리한다. */
++export async function createPortal(_db: D1Like, _paypal: PayPalPort, _userId: string, _appOrigin: string, env: "sandbox" | "live" = "live") {
++  return { url: env === "sandbox" ? "https://www.sandbox.paypal.com/myaccount/autopay/" : "https://www.paypal.com/myaccount/autopay/" };
+ }
+ 
+-/** 결제가 끝나지 않은 채 방치된 구독 행 정리(24시간). */
++/** 승인 없이 방치된 결제 전 구독 정리(24시간). 결제 연결이 끝난 구독은 건드리지 않는다. */
+ export async function expireIncompleteSubscriptions(db: D1Like, nowMs: number, ttlHours = 24): Promise<number> {
+-  const r = await db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE status='incomplete' AND created_at < ? AND stripe_subscription_id IS NULL").bind(nowIso(nowMs), nowIso(nowMs - ttlHours * 3_600_000)).run();
++  const r = await db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE status='incomplete' AND created_at < ?").bind(nowIso(nowMs), nowIso(nowMs - ttlHours * 3_600_000)).run();
+   return r.meta.changes;
+ }
++
++/**
++ * 취소 예약(canceling) 구독의 이용 기간이 끝나면 canceled 로 확정하고 서비스 중지 작업을 만든다.
++ * PayPal 은 취소 즉시 CANCELLED 웹훅을 보내므로(기간 종료 시점 아님), 이용 종료는 우리 쪽에서 기간 만료로 처리한다.
++ */
++export async function finalizeCanceledSubscriptions(db: D1Like, nowMs: number): Promise<number> {
++  const { results } = await db.prepare("SELECT id FROM subscriptions WHERE status = 'canceling' AND current_period_end IS NOT NULL AND current_period_end <= ?").bind(nowIso(nowMs)).all<{ id: string }>();
++  for (const s of results) {
++    await db.batch([
++      db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE id=? AND status='canceling'").bind(nowIso(nowMs), s.id),
++      db.prepare("INSERT OR IGNORE INTO deployment_jobs(id,kind,subscription_id,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?,?)").bind(newId("job"), "suspend", s.id, `suspend:${s.id}:period_end`, nowIso(nowMs), nowIso(nowMs)),
++    ]);
++  }
++  return results.length;
++}
+diff --git a/src/lib/domainPricing.ts b/src/lib/domainPricing.ts
+index 6c58410..d15006e 100644
+--- a/src/lib/domainPricing.ts
++++ b/src/lib/domainPricing.ts
+@@ -4,25 +4,26 @@ import { usd, type Micro } from "./money";
+ export interface DomainPricingConfig {
+   markupBp: number;
+   minFeeMicro: Micro;
+-  stripeRateBp: number;
+-  stripeFixedMicro: Micro;
++  feeRateBp: number;
++  feeFixedMicro: Micro;
+   /** 견적 후 등록 시점에 원가가 올라도 감수하는 한도. 초과하면 등록하지 않고 환불. */
+   driftToleranceMicro: Micro;
+   quoteTtlMinutes: number;
+ }
+-export const SEED_DOMAIN_PRICING: DomainPricingConfig = { markupBp: 1500, minFeeMicro: usd("2.00"), stripeRateBp: 290, stripeFixedMicro: usd("0.30"), driftToleranceMicro: usd("0.25"), quoteTtlMinutes: 15 };
++// 결제 수수료 가정치(PayPal 해외 상업 거래 기준 추정: 4.4% + $0.30). 계정 계약 수수료와 다를 수 있으니 운영자가 확인 후 조정한다.
++export const SEED_DOMAIN_PRICING: DomainPricingConfig = { markupBp: 1500, minFeeMicro: usd("2.00"), feeRateBp: 440, feeFixedMicro: usd("0.30"), driftToleranceMicro: usd("0.25"), quoteTtlMinutes: 15 };
+ 
+ const ceilCents = (m: Micro) => Math.ceil(m / 10_000) * 10_000;
+ 
+-/** 고객 판매가 = 원가 + 수수료를 Stripe 수수료까지 감안해 올림(센트 단위). 수수료 하한 보장: 결제 수수료를 빼고도 minFee 이상 남는다. */
++/** 고객 판매가 = 원가 + 수수료를 결제(PayPal) 수수료까지 감안해 올림(센트 단위). 수수료 하한 보장: 결제 수수료를 빼고도 minFee 이상 남는다. */
+ export function priceFor(costMicro: Micro, c: DomainPricingConfig = SEED_DOMAIN_PRICING): Micro {
+   const fee = Math.max(c.minFeeMicro, Math.round((costMicro * c.markupBp) / 10_000));
+   const base = costMicro + fee;
+-  return ceilCents(Math.ceil(((base + c.stripeFixedMicro) * 10_000) / (10_000 - c.stripeRateBp)));
++  return ceilCents(Math.ceil(((base + c.feeFixedMicro) * 10_000) / (10_000 - c.feeRateBp)));
+ }
+ 
+ export function netMarginMicro(priceMicro: Micro, costMicro: Micro, c: DomainPricingConfig = SEED_DOMAIN_PRICING): Micro {
+-  return priceMicro - Math.round((priceMicro * c.stripeRateBp) / 10_000) - c.stripeFixedMicro - costMicro;
++  return priceMicro - Math.round((priceMicro * c.feeRateBp) / 10_000) - c.feeFixedMicro - costMicro;
+ }
+ 
+ export const driftAcceptable = (quotedCost: Micro, currentCost: Micro, c: DomainPricingConfig = SEED_DOMAIN_PRICING) => currentCost - quotedCost <= c.driftToleranceMicro;
+diff --git a/src/lib/jobs.ts b/src/lib/jobs.ts
+index 7d797a6..1bd3dd7 100644
+--- a/src/lib/jobs.ts
++++ b/src/lib/jobs.ts
+@@ -1,7 +1,7 @@
+ import { type D1Like, newId, nowIso } from "./db";
+ import { assertTransition, JOB_TRANSITIONS, type JobState } from "./states";
+-import type { StripePort } from "./stripe.client";
+-import { StripeError } from "./stripe.client";
++import type { PayPalPort } from "./paypal.client";
++import { PayPalError } from "./paypal.client";
+ import { CfApiError } from "./cfApi";
+ import type { RegistrarPort, NameserverPort } from "./registrar";
+ import type { ZonesPort } from "./zones";
+@@ -16,7 +16,7 @@ export interface Provisioner { provision(subId: string): Promise<void>; suspend(
+ export interface JobContext {
+   db: D1Like;
+   nowMs: number;
+-  stripe: StripePort;
++  paypal: PayPalPort;
+   portFor(provider: string): RegistrarPort;
+   nsPortFor(provider: string): NameserverPort;
+   zones: ZonesPort;
+@@ -35,7 +35,7 @@ export function backoffSeconds(attempt: number, jitter = 0.5): number {
+ function classify(e: unknown): "retry" | "permanent" {
+   if (e instanceof PermanentError) return "permanent";
+   if (e instanceof RetryableError) return "retry";
+-  if (e instanceof CfApiError || e instanceof StripeError) return e.retryable ? "retry" : "permanent";
++  if (e instanceof CfApiError || e instanceof PayPalError) return e.retryable ? "retry" : "permanent";
+   return "retry"; // 알 수 없는 오류는 최대 시도 횟수까지만 재시도
+ }
+ 
+@@ -62,12 +62,12 @@ export const HANDLERS: Record<string, Handler> = {
+ 
+   async refund_domain_order(job, ctx) {
+     const { orderId } = JSON.parse(job.payload_json) as { orderId: string };
+-    const o = await ctx.db.prepare("SELECT status, stripe_payment_intent_id AS pi FROM domain_orders WHERE id = ?").bind(orderId).first<{ status: string; pi: string | null }>();
++    const o = await ctx.db.prepare("SELECT status, stripe_payment_intent_id AS pi FROM domain_orders /* 외부 결제 참조 = PayPal capture id */ WHERE id = ?").bind(orderId).first<{ status: string; pi: string | null }>();
+     if (!o) throw new PermanentError("주문 없음");
+     if (o.status === "refunded") return;
+     if (o.status !== "refund_due") throw new PermanentError(`환불 대상이 아닌 상태: ${o.status}`); // 등록 완료 주문은 환불하지 않는다
+     if (!o.pi) throw new PermanentError("결제 정보 없음");
+-    await ctx.stripe.createRefund({ paymentIntent: o.pi, metadata: { domain_order_id: orderId } }, `refund:${orderId}`);
++    await ctx.paypal.refundCapture({ captureId: o.pi, note: "도메인 등록 실패로 인한 전액 환불" }, `refund:${orderId}`);
+     await markRefunded(ctx.db, orderId, ctx.nowMs);
+   },
+ 
+diff --git a/src/lib/paypal.client.ts b/src/lib/paypal.client.ts
+new file mode 100644
+index 0000000..4368a87
+--- /dev/null
++++ b/src/lib/paypal.client.ts
+@@ -0,0 +1,208 @@
++import type { Cur } from "./currency";
++
++/**
++ * PayPal REST 클라이언트(구독 Billing API v1 + Orders API v2 + Payments v2 + Webhooks v1).
++ *
++ * 플랫폼 제약(공식 문서 확인):
++ * - PayPal 은 KRW 결제를 지원하지 않는다 → USD 만 사용한다.
++ * - 한국에 등록된 PayPal 계정은 한국 밖 구매자의 결제만 받을 수 있다(국내 결제 불가).
++ */
++
++export class PayPalError extends Error {
++  constructor(public status: number, public code: string | undefined, message: string) { super(message); }
++  /** 네트워크 오류(status 0)·429·5xx 는 재시도 가능. 그 외 4xx 는 요청 자체의 문제라 재시도해도 같다. */
++  get retryable() { return this.status === 0 || this.status === 429 || this.status >= 500; }
++}
++
++/** USD 센트(정수) → PayPal 금액 문자열("12.99"). 부동소수점을 쓰지 않는다. */
++export function centsToValue(cents: number): string {
++  if (!Number.isInteger(cents) || cents < 0) throw new Error("invalid_cents");
++  return `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
++}
++/** PayPal 금액 문자열("12.99") → 센트(정수). */
++export function valueToCents(v: string | number): number {
++  const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(v));
++  if (!m) throw new Error(`invalid_amount:${v}`);
++  return Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0") || 0);
++}
++
++export interface WebhookHeaders {
++  authAlgo: string | null; certUrl: string | null; transmissionId: string | null; transmissionSig: string | null; transmissionTime: string | null;
++}
++
++export interface PayPalPort {
++  /** 월 구독 플랜(상품 포함)을 만든다. 같은 idem 키는 같은 결과를 돌려준다. */
++  createMonthlyPlan(p: { name: string; currency: Cur; amountMinor: number; customId: string }, idem: string): Promise<{ planId: string }>;
++  /** 구독을 만들고 구매자가 승인할 URL 을 돌려준다. 결제 확정은 웹훅으로만 한다. */
++  createSubscription(p: { planId: string; customId: string; email: string; returnUrl: string; cancelUrl: string }, idem: string): Promise<{ id: string; approveUrl: string }>;
++  getSubscription(id: string): Promise<{ id: string; status: string; nextBillingTime: string | null; lastPaymentTime: string | null }>;
++  cancelSubscription(id: string, reason: string): Promise<void>;
++  suspendSubscription(id: string, reason: string): Promise<void>;
++  activateSubscription(id: string, reason: string): Promise<void>;
++  /** 일회성 결제(도메인 등). */
++  createOrder(p: { customId: string; currency: Cur; amountMinor: number; description: string; returnUrl: string; cancelUrl: string }, idem: string): Promise<{ id: string; approveUrl: string }>;
++  captureOrder(orderId: string, idem: string): Promise<{ orderId: string; captureId: string; status: string; customId: string | null; currency: string; amountMinor: number }>;
++  /** 캡처(구독 결제 포함, 트랜잭션 ID) 환불. amountMinor 생략 시 전액. */
++  refundCapture(p: { captureId: string; amountMinor?: number; currency?: Cur; note?: string }, idem: string): Promise<{ id: string; status: string }>;
++  /** 웹훅 서명 검증(PayPal verify-webhook-signature). */
++  verifyWebhook(p: { headers: WebhookHeaders; webhookId: string; rawBody: string }): Promise<boolean>;
++}
++
++type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; json(): Promise<any> }>;
++
++export const PAYPAL_BASE = { sandbox: "https://api-m.sandbox.paypal.com", live: "https://api-m.paypal.com" } as const;
++
++export class PayPalHttp implements PayPalPort {
++  private token: { value: string; exp: number } | null = null;
++  constructor(private o: { clientId: string; clientSecret: string; env: "sandbox" | "live"; fetch?: Fetch; now?: () => number }) {
++    if (!o.clientId || !o.clientSecret) throw new Error("PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET 누락");
++  }
++  private get base() { return PAYPAL_BASE[this.o.env]; }
++  private f: Fetch = (u, i) => (this.o.fetch ?? ((url, init) => fetch(url, init) as Promise<{ status: number; json(): Promise<any> }>))(u, i);
++  private nowMs() { return (this.o.now ?? Date.now)(); }
++
++  private async accessToken(): Promise<string> {
++    if (this.token && this.token.exp > this.nowMs() + 60_000) return this.token.value;
++    let res: { status: number; json(): Promise<any> };
++    try {
++      res = await this.f(`${this.base}/v1/oauth2/token`, {
++        method: "POST",
++        headers: { Authorization: `Basic ${btoa(`${this.o.clientId}:${this.o.clientSecret}`)}`, "Content-Type": "application/x-www-form-urlencoded" },
++        body: "grant_type=client_credentials",
++      });
++    } catch { throw new PayPalError(0, "network_error", "PayPal 인증 연결 실패"); }
++    const j = await res.json().catch(() => null);
++    if (res.status >= 400 || !j?.access_token) throw new PayPalError(res.status, j?.error, j?.error_description ?? `PayPal 인증 실패 HTTP ${res.status}`);
++    this.token = { value: j.access_token, exp: this.nowMs() + Number(j.expires_in ?? 300) * 1000 };
++    return this.token.value;
++  }
++
++  private async call<T>(method: "POST" | "GET" | "PATCH", path: string, body: unknown, idem?: string): Promise<T> {
++    const headers: Record<string, string> = { Authorization: `Bearer ${await this.accessToken()}`, "Content-Type": "application/json", Prefer: "return=representation" };
++    if (idem) headers["PayPal-Request-Id"] = idem.slice(0, 108);
++    let res: { status: number; json(): Promise<any> };
++    try { res = await this.f(`${this.base}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }); }
++    catch { throw new PayPalError(0, "network_error", "PayPal 연결 실패"); }
++    // 204 No Content(취소·정지 등)는 본문이 없다.
++    const j = res.status === 204 ? {} : await res.json().catch(() => null);
++    if (res.status >= 400 || j === null) throw new PayPalError(res.status, j?.name, j?.message ?? `HTTP ${res.status}`);
++    return j as T;
++  }
++
++  async createMonthlyPlan(p: { name: string; currency: Cur; amountMinor: number; customId: string }, idem: string) {
++    if (p.currency !== "USD") throw new PayPalError(400, "currency_unsupported", "PayPal 은 USD 만 지원합니다.");
++    const product = await this.call<{ id: string }>("POST", "/v1/catalogs/products", { name: p.name.slice(0, 127), type: "SERVICE", category: "SOFTWARE" }, `product:${idem}`);
++    const plan = await this.call<{ id: string }>("POST", "/v1/billing/plans", {
++      product_id: product.id, name: p.name.slice(0, 127), status: "ACTIVE", description: p.name.slice(0, 127),
++      billing_cycles: [{ frequency: { interval_unit: "MONTH", interval_count: 1 }, tenure_type: "REGULAR", sequence: 1, total_cycles: 0,
++        pricing_scheme: { fixed_price: { value: centsToValue(p.amountMinor), currency_code: "USD" } } }],
++      payment_preferences: { auto_bill_outstanding: true, payment_failure_threshold: 3, setup_fee_failure_action: "CANCEL" },
++    }, `plan:${idem}`);
++    return { planId: plan.id };
++  }
++
++  async createSubscription(p: { planId: string; customId: string; email: string; returnUrl: string; cancelUrl: string }, idem: string) {
++    const s = await this.call<{ id: string; links: { rel: string; href: string }[] }>("POST", "/v1/billing/subscriptions", {
++      plan_id: p.planId, custom_id: p.customId.slice(0, 127), subscriber: { email_address: p.email },
++      application_context: { brand_name: "CloudPress", locale: "ko-KR", user_action: "SUBSCRIBE_NOW", shipping_preference: "NO_SHIPPING",
++        payment_method: { payer_selected: "PAYPAL", payee_preferred: "IMMEDIATE_PAYMENT_REQUIRED" }, return_url: p.returnUrl, cancel_url: p.cancelUrl },
++    }, idem);
++    const approve = s.links?.find((l) => l.rel === "approve")?.href;
++    if (!approve) throw new PayPalError(502, "no_approve_link", "PayPal 승인 URL 이 없습니다.");
++    return { id: s.id, approveUrl: approve };
++  }
++
++  async getSubscription(id: string) {
++    const s = await this.call<any>("GET", `/v1/billing/subscriptions/${encodeURIComponent(id)}`, undefined);
++    return { id: s.id, status: s.status, nextBillingTime: s.billing_info?.next_billing_time ?? null, lastPaymentTime: s.billing_info?.last_payment?.time ?? null };
++  }
++  async cancelSubscription(id: string, reason: string) { await this.call("POST", `/v1/billing/subscriptions/${encodeURIComponent(id)}/cancel`, { reason: reason.slice(0, 128) }); }
++  async suspendSubscription(id: string, reason: string) { await this.call("POST", `/v1/billing/subscriptions/${encodeURIComponent(id)}/suspend`, { reason: reason.slice(0, 128) }); }
++  async activateSubscription(id: string, reason: string) { await this.call("POST", `/v1/billing/subscriptions/${encodeURIComponent(id)}/activate`, { reason: reason.slice(0, 128) }); }
++
++  async createOrder(p: { customId: string; currency: Cur; amountMinor: number; description: string; returnUrl: string; cancelUrl: string }, idem: string) {
++    if (p.currency !== "USD") throw new PayPalError(400, "currency_unsupported", "PayPal 은 USD 만 지원합니다.");
++    const o = await this.call<{ id: string; links: { rel: string; href: string }[] }>("POST", "/v2/checkout/orders", {
++      intent: "CAPTURE",
++      purchase_units: [{ custom_id: p.customId.slice(0, 127), description: p.description.slice(0, 127), amount: { currency_code: "USD", value: centsToValue(p.amountMinor) } }],
++      payment_source: { paypal: { experience_context: { brand_name: "CloudPress", locale: "ko-KR", user_action: "PAY_NOW", shipping_preference: "NO_SHIPPING", return_url: p.returnUrl, cancel_url: p.cancelUrl } } },
++    }, idem);
++    const approve = o.links?.find((l) => l.rel === "payer-action" || l.rel === "approve")?.href;
++    if (!approve) throw new PayPalError(502, "no_approve_link", "PayPal 승인 URL 이 없습니다.");
++    return { id: o.id, approveUrl: approve };
++  }
++
++  async captureOrder(orderId: string, idem: string) {
++    const o = await this.call<any>("POST", `/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`, {}, idem);
++    const pu = o.purchase_units?.[0];
++    const cap = pu?.payments?.captures?.[0];
++    if (!cap) throw new PayPalError(502, "no_capture", "캡처 결과가 없습니다.");
++    return { orderId: o.id, captureId: cap.id as string, status: cap.status as string, customId: (cap.custom_id ?? pu?.custom_id ?? null) as string | null, currency: cap.amount?.currency_code as string, amountMinor: valueToCents(cap.amount?.value) };
++  }
++
++  async refundCapture(p: { captureId: string; amountMinor?: number; currency?: Cur; note?: string }, idem: string) {
++    const body: Record<string, unknown> = {};
++    if (p.amountMinor) body.amount = { value: centsToValue(p.amountMinor), currency_code: p.currency ?? "USD" };
++    if (p.note) body.note_to_payer = p.note.slice(0, 255);
++    const r = await this.call<{ id: string; status: string }>("POST", `/v2/payments/captures/${encodeURIComponent(p.captureId)}/refund`, body, idem);
++    return { id: r.id, status: r.status };
++  }
++
++  async verifyWebhook(p: { headers: WebhookHeaders; webhookId: string; rawBody: string }) {
++    const h = p.headers;
++    if (!h.authAlgo || !h.certUrl || !h.transmissionId || !h.transmissionSig || !h.transmissionTime) return false;
++    // 인증서 URL 은 PayPal 도메인이어야 한다(서명 검증을 가짜 서버로 유도하는 공격 방지는 PayPal API 가 하지만 입력도 거른다).
++    try { if (!/(^|\.)paypal\.com$/.test(new URL(h.certUrl).hostname)) return false; } catch { return false; }
++    let event: unknown;
++    try { event = JSON.parse(p.rawBody); } catch { return false; }
++    const r = await this.call<{ verification_status: string }>("POST", "/v1/notifications/verify-webhook-signature", {
++      auth_algo: h.authAlgo, cert_url: h.certUrl, transmission_id: h.transmissionId, transmission_sig: h.transmissionSig, transmission_time: h.transmissionTime,
++      webhook_id: p.webhookId, webhook_event: event,
++    });
++    return r.verification_status === "SUCCESS";
++  }
++}
++
++/** 개발·테스트용 가짜 PayPal. 실제 결제는 일어나지 않는다. 모든 호출을 기록한다. */
++export class MockPayPal implements PayPalPort {
++  calls: { op: string; args: unknown; idem?: string }[] = [];
++  private memo = new Map<string, unknown>();
++  failNext: PayPalError | null = null;
++  /** verifyWebhook 은 `paypal-transmission-sig` 가 이 값일 때만 통과한다(테스트 전용). */
++  static readonly VALID_SIG = "mock-valid-signature";
++  private n = 0;
++  /** 재시작해도 로컬 DB 의 기존 ID 와 겹치지 않게 호출 시점에 난수 접미사를 붙인다(전역 스코프에서는 난수 생성 금지). */
++  private uid() { return `${++this.n}${crypto.randomUUID().slice(0, 6)}`; }
++  private run<T>(op: string, args: unknown, idem: string | undefined, make: () => T): T {
++    this.calls.push({ op, args, idem });
++    if (this.failNext) { const e = this.failNext; this.failNext = null; throw e; }
++    if (idem && this.memo.has(`${op}:${idem}`)) return this.memo.get(`${op}:${idem}`) as T;
++    const v = make(); if (idem) this.memo.set(`${op}:${idem}`, v); return v;
++  }
++  async createMonthlyPlan(p: { name: string; currency: Cur; amountMinor: number; customId: string }, idem: string) {
++    if (p.currency !== "USD") throw new PayPalError(400, "currency_unsupported", "PayPal 은 USD 만 지원합니다.");
++    return this.run("plan", p, idem, () => ({ planId: `P-MOCK${this.uid()}` }));
++  }
++  async createSubscription(p: { planId: string; customId: string; email: string; returnUrl: string; cancelUrl: string }, idem: string) {
++    return this.run("subscription", p, idem, () => { const id = `I-MOCK${this.uid()}`; return { id, approveUrl: `https://www.sandbox.paypal.test/webapps/billing/subscriptions?ba_token=${id}` }; });
++  }
++  async getSubscription(id: string) { return this.run("get_subscription", { id }, undefined, () => ({ id, status: "ACTIVE", nextBillingTime: null, lastPaymentTime: null })); }
++  async cancelSubscription(id: string, reason: string) { this.run("cancel_subscription", { id, reason }, undefined, () => undefined); }
++  async suspendSubscription(id: string, reason: string) { this.run("suspend_subscription", { id, reason }, undefined, () => undefined); }
++  async activateSubscription(id: string, reason: string) { this.run("activate_subscription", { id, reason }, undefined, () => undefined); }
++  async createOrder(p: { customId: string; currency: Cur; amountMinor: number; description: string; returnUrl: string; cancelUrl: string }, idem: string) {
++    if (p.currency !== "USD") throw new PayPalError(400, "currency_unsupported", "PayPal 은 USD 만 지원합니다.");
++    return this.run("order", p, idem, () => { const id = `ORD-MOCK${this.uid()}`; return { id, approveUrl: `https://www.sandbox.paypal.test/checkoutnow?token=${id}` }; });
++  }
++  async captureOrder(orderId: string, idem: string) {
++    return this.run("capture", { orderId }, idem, () => ({ orderId, captureId: `CAP-MOCK${this.uid()}`, status: "COMPLETED", customId: null, currency: "USD", amountMinor: 0 }));
++  }
++  async refundCapture(p: { captureId: string; amountMinor?: number; currency?: Cur; note?: string }, idem: string) {
++    return this.run("refund", p, idem, () => ({ id: `REF-MOCK${this.uid()}`, status: "COMPLETED" }));
++  }
++  async verifyWebhook(p: { headers: WebhookHeaders; webhookId: string; rawBody: string }) {
++    this.calls.push({ op: "verify_webhook", args: { webhookId: p.webhookId } });
++    if (this.failNext) { const e = this.failNext; this.failNext = null; throw e; }
++    return p.headers.transmissionSig === MockPayPal.VALID_SIG;
++  }
++}
+diff --git a/src/lib/scheduler.ts b/src/lib/scheduler.ts
+index 55994d8..f3b7944 100644
+--- a/src/lib/scheduler.ts
++++ b/src/lib/scheduler.ts
+@@ -1,6 +1,6 @@
+ import { type D1Like, type QueueLike } from "./db";
+ import { expireQuotes } from "./domainOrders";
+-import { expireIncompleteSubscriptions } from "./checkout";
++import { expireIncompleteSubscriptions, finalizeCanceledSubscriptions } from "./checkout";
+ import { recoverStuckJobs } from "./jobs";
+ import { dispatchOutbox } from "./outbox";
+ import { checkActivation, nextActivationDelayMin, type ZoneRow } from "./zoneService";
+@@ -17,6 +17,7 @@ export async function runScheduled(db: D1Like, deps: { queue: QueueLike<{ jobId:
+   const step = async (name: string, f: () => Promise<void>) => { try { await f(); } catch (e) { r.errors.push(`${name}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200)); } };
+   await step("expireQuotes", async () => { r.quotesExpired = await expireQuotes(db, nowMs); });
+   await step("expireIncomplete", async () => { r.incompleteExpired = await expireIncompleteSubscriptions(db, nowMs); });
++  await step("finalizeCanceled", async () => { await finalizeCanceledSubscriptions(db, nowMs); });
+   await step("recoverStuck", async () => { r.stuckRecovered = await recoverStuckJobs(db, nowMs); });
+   await step("dispatchOutbox", async () => { if (deps.queue) r.dispatched = await dispatchOutbox(db, deps.queue, nowMs); });
+   await step("zones", async () => {
+diff --git a/src/lib/stripe.client.ts b/src/lib/stripe.client.ts
+deleted file mode 100644
+index a748f06..0000000
+--- a/src/lib/stripe.client.ts
++++ /dev/null
+@@ -1,98 +0,0 @@
+-import type { Cur } from "./currency";
+-
+-export class StripeError extends Error {
+-  constructor(public status: number, public code: string | undefined, message: string) { super(message); }
+-  /** 네트워크 오류(status 0)·429·5xx 만 재시도. 카드 거절 등 4xx 는 요청 자체의 문제. */
+-  get retryable() { return this.status === 0 || this.status === 429 || this.status >= 500; }
+-}
+-
+-/** Stripe 는 JSON 이 아니라 form-urlencoded(대괄호 중첩)를 받는다. */
+-export function encodeForm(obj: Record<string, unknown>, prefix = ""): string[] {
+-  const out: string[] = [];
+-  for (const [k, v] of Object.entries(obj)) {
+-    if (v === undefined || v === null) continue;
+-    const key = prefix ? `${prefix}[${k}]` : k;
+-    if (Array.isArray(v)) v.forEach((item, i) => { if (item !== null && typeof item === "object") out.push(...encodeForm(item as Record<string, unknown>, `${key}[${i}]`)); else out.push(`${encodeURIComponent(`${key}[${i}]`)}=${encodeURIComponent(String(item))}`); });
+-    else if (typeof v === "object") out.push(...encodeForm(v as Record<string, unknown>, key));
+-    else out.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(v))}`);
+-  }
+-  return out;
+-}
+-
+-export interface CheckoutParams {
+-  mode: "subscription" | "payment";
+-  customer: string;
+-  successUrl: string;
+-  cancelUrl: string;
+-  clientReferenceId: string;
+-  metadata: Record<string, string>;
+-  /** 구독: 미리 만든 Stripe Price. */
+-  priceId?: string;
+-  /** 일회성(도메인): 인라인 가격. amount 는 통화 최소 단위(USD 센트, KRW 원). */
+-  inline?: { currency: Cur; amountMinor: number; name: string };
+-  expiresAtSec?: number;
+-}
+-
+-export interface StripePort {
+-  createCustomer(p: { email: string; metadata: Record<string, string> }, idem: string): Promise<{ id: string }>;
+-  createMonthlyPrice(p: { name: string; currency: Cur; amountMinor: number; metadata: Record<string, string> }, idem: string): Promise<{ priceId: string }>;
+-  createCheckoutSession(p: CheckoutParams, idem: string): Promise<{ id: string; url: string }>;
+-  createPortalSession(p: { customer: string; returnUrl: string }): Promise<{ url: string }>;
+-  createRefund(p: { paymentIntent: string; amountMinor?: number; metadata?: Record<string, string> }, idem: string): Promise<{ id: string; status: string }>;
+-}
+-
+-type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ status: number; json(): Promise<any> }>;
+-
+-/** Stripe REST 어댑터. 모든 쓰기 요청에 Idempotency-Key 를 보낸다. apiVersion 은 운영자가 고정해서 주입(코드에 임의 버전을 넣지 않음). */
+-export class StripeHttp implements StripePort {
+-  constructor(private o: { secretKey: string; apiVersion?: string; fetch?: Fetch }) { if (!/^(sk|rk)_/.test(o.secretKey)) throw new Error("STRIPE_SECRET_KEY 형식 오류"); }
+-  private async call<T>(method: "POST" | "GET", path: string, body: Record<string, unknown> | undefined, idem?: string): Promise<T> {
+-    const f: Fetch = this.o.fetch ?? ((u, i) => fetch(u, i) as Promise<{ status: number; json(): Promise<any> }>);
+-    const headers: Record<string, string> = { Authorization: `Bearer ${this.o.secretKey}`, "Content-Type": "application/x-www-form-urlencoded" };
+-    if (idem) headers["Idempotency-Key"] = idem;
+-    if (this.o.apiVersion) headers["Stripe-Version"] = this.o.apiVersion;
+-    let res: { status: number; json(): Promise<any> };
+-    try { res = await f(`https://api.stripe.com${path}`, { method, headers, body: body ? encodeForm(body).join("&") : undefined }); } catch { throw new StripeError(0, "network_error", "Stripe 연결 실패"); }
+-    const j = await res.json().catch(() => null);
+-    if (res.status >= 400 || !j) throw new StripeError(res.status, j?.error?.code, j?.error?.message ?? `HTTP ${res.status}`);
+-    return j as T;
+-  }
+-  createCustomer(p: { email: string; metadata: Record<string, string> }, idem: string) { return this.call<{ id: string }>("POST", "/v1/customers", { email: p.email, metadata: p.metadata }, idem); }
+-  async createMonthlyPrice(p: { name: string; currency: Cur; amountMinor: number; metadata: Record<string, string> }, idem: string) {
+-    const r = await this.call<{ id: string }>("POST", "/v1/prices", { currency: p.currency.toLowerCase(), unit_amount: p.amountMinor, recurring: { interval: "month" }, product_data: { name: p.name }, metadata: p.metadata }, idem);
+-    return { priceId: r.id };
+-  }
+-  async createCheckoutSession(p: CheckoutParams, idem: string) {
+-    const body: Record<string, unknown> = {
+-      mode: p.mode, customer: p.customer, success_url: p.successUrl, cancel_url: p.cancelUrl, client_reference_id: p.clientReferenceId, metadata: p.metadata,
+-      ...(p.mode === "subscription" ? { line_items: [{ price: p.priceId, quantity: 1 }], subscription_data: { metadata: p.metadata } } : { line_items: [{ quantity: 1, price_data: { currency: p.inline!.currency.toLowerCase(), unit_amount: p.inline!.amountMinor, product_data: { name: p.inline!.name } } }], payment_intent_data: { metadata: p.metadata } }),
+-      ...(p.expiresAtSec ? { expires_at: p.expiresAtSec } : {}),
+-    };
+-    const r = await this.call<{ id: string; url: string }>("POST", "/v1/checkout/sessions", body, idem);
+-    return { id: r.id, url: r.url };
+-  }
+-  async createPortalSession(p: { customer: string; returnUrl: string }) { const r = await this.call<{ url: string }>("POST", "/v1/billing_portal/sessions", { customer: p.customer, return_url: p.returnUrl }); return { url: r.url }; }
+-  async createRefund(p: { paymentIntent: string; amountMinor?: number; metadata?: Record<string, string> }, idem: string) {
+-    const r = await this.call<{ id: string; status: string }>("POST", "/v1/refunds", { payment_intent: p.paymentIntent, ...(p.amountMinor ? { amount: p.amountMinor } : {}), ...(p.metadata ? { metadata: p.metadata } : {}) }, idem);
+-    return { id: r.id, status: r.status };
+-  }
+-}
+-
+-/** 모의 모드·테스트용. 같은 멱등 키는 같은 결과를 돌려준다(Stripe 동작과 동일). */
+-export class MockStripe implements StripePort {
+-  calls: { op: string; args: unknown; idem?: string }[] = [];
+-  private memo = new Map<string, unknown>();
+-  failNext: StripeError | null = null;
+-  private n = 0;
+-  private run<T>(op: string, args: unknown, idem: string | undefined, make: () => T): T {
+-    this.calls.push({ op, args, idem });
+-    if (this.failNext) { const e = this.failNext; this.failNext = null; throw e; }
+-    if (idem && this.memo.has(`${op}:${idem}`)) return this.memo.get(`${op}:${idem}`) as T;
+-    const v = make(); if (idem) this.memo.set(`${op}:${idem}`, v); return v;
+-  }
+-  async createCustomer(p: { email: string; metadata: Record<string, string> }, idem: string) { return this.run("customer", p, idem, () => ({ id: `cus_mock${++this.n}` })); }
+-  async createMonthlyPrice(p: { name: string; currency: Cur; amountMinor: number; metadata: Record<string, string> }, idem: string) { return this.run("price", p, idem, () => ({ priceId: `price_mock${++this.n}` })); }
+-  async createCheckoutSession(p: CheckoutParams, idem: string) { return this.run("checkout", p, idem, () => ({ id: `cs_mock${++this.n}`, url: `https://checkout.stripe.test/c/${this.n}` })); }
+-  async createPortalSession(p: { customer: string; returnUrl: string }) { return this.run("portal", p, undefined, () => ({ url: `https://billing.stripe.test/p/${p.customer}` })); }
+-  async createRefund(p: { paymentIntent: string; amountMinor?: number }, idem: string) { return this.run("refund", p, idem, () => ({ id: `re_mock${++this.n}`, status: "succeeded" })); }
+-}
+diff --git a/src/lib/stripe.ts b/src/lib/stripe.ts
+deleted file mode 100644
+index dbe3c40..0000000
+--- a/src/lib/stripe.ts
++++ /dev/null
+@@ -1,39 +0,0 @@
+-import { hmacSha256Hex, constantTimeEqual } from "./crypto";
+-
+-export const WEBHOOK_TOLERANCE_SEC = 300;
+-
+-export interface StripeEvent { id: string; type: string; created: number; data: { object: Record<string, any> } }
+-
+-export type VerifyResult = { ok: true; event: StripeEvent } | { ok: false; reason: "missing_header" | "bad_header" | "stale" | "mismatch" | "bad_json" };
+-
+-/** Stripe 웹훅 서명 검증: HMAC-SHA256("t.payload"), 5분 허용 오차, 상수 시간 비교. 원문(raw body) 그대로 검증해야 한다. */
+-export async function verifyStripeSignature(rawBody: string, header: string | null, secret: string, nowMs: number): Promise<VerifyResult> {
+-  if (!header) return { ok: false, reason: "missing_header" };
+-  let t: string | undefined;
+-  const v1: string[] = [];
+-  for (const part of header.split(",")) {
+-    const i = part.indexOf("=");
+-    if (i < 0) continue;
+-    const k = part.slice(0, i).trim();
+-    const v = part.slice(i + 1).trim();
+-    if (k === "t") t = v;
+-    else if (k === "v1") v1.push(v);
+-  }
+-  if (!t || !/^\d+$/.test(t) || v1.length === 0) return { ok: false, reason: "bad_header" };
+-  if (Math.abs(nowMs / 1000 - Number(t)) > WEBHOOK_TOLERANCE_SEC) return { ok: false, reason: "stale" };
+-  const expected = await hmacSha256Hex(secret, `${t}.${rawBody}`);
+-  if (!v1.some((s) => constantTimeEqual(s, expected))) return { ok: false, reason: "mismatch" };
+-  try {
+-    const event = JSON.parse(rawBody) as StripeEvent;
+-    if (typeof event.id !== "string" || typeof event.type !== "string") return { ok: false, reason: "bad_json" };
+-    return { ok: true, event };
+-  } catch {
+-    return { ok: false, reason: "bad_json" };
+-  }
+-}
+-
+-/** 테스트·모의 모드용 서명 생성기. 운영 코드 경로에서는 사용하지 않는다. */
+-export async function signStripePayload(rawBody: string, secret: string, nowMs: number): Promise<string> {
+-  const t = Math.floor(nowMs / 1000);
+-  return `t=${t},v1=${await hmacSha256Hex(secret, `${t}.${rawBody}`)}`;
+-}
+diff --git a/src/lib/webhooks.ts b/src/lib/webhooks.ts
+index ded706e..bd638d5 100644
+--- a/src/lib/webhooks.ts
++++ b/src/lib/webhooks.ts
+@@ -1,25 +1,41 @@
+ import { type D1Like, newId, nowIso } from "./db";
+-import { verifyStripeSignature, type StripeEvent } from "./stripe";
+ import { assertTransition, SUBSCRIPTION_TRANSITIONS, type SubscriptionState } from "./states";
+-import { parseCurrency, minorToMicro, latestFxRate } from "./currency";
++import { valueToCents, type PayPalPort, type WebhookHeaders } from "./paypal.client";
+ import { markPaid } from "./domainOrders";
+ 
+-type Sub = { id: string; customer_id: string; status: SubscriptionState; stripe_subscription_id: string | null };
++type Sub = { id: string; customer_id: string; status: SubscriptionState; paypal_subscription_id: string | null; current_period_end: string | null };
+ 
+ export interface WebhookResponse { status: number; body: string }
+ 
++export interface PayPalEvent { id: string; event_type: string; create_time?: string; resource: Record<string, any> }
++
++export function paypalWebhookHeaders(h: Headers): WebhookHeaders {
++  return {
++    authAlgo: h.get("paypal-auth-algo"), certUrl: h.get("paypal-cert-url"), transmissionId: h.get("paypal-transmission-id"),
++    transmissionSig: h.get("paypal-transmission-sig"), transmissionTime: h.get("paypal-transmission-time"),
++  };
++}
++
++const MICRO_PER_CENT = 10_000;
++const addMonthUtc = (ms: number) => { const d = new Date(ms); d.setUTCMonth(d.getUTCMonth() + 1); return d.getTime(); };
++
+ /**
+- * Stripe 웹훅 진입점.
+- * - 서명 검증 실패 → 400 (처리하지 않음)
+- * - 같은 이벤트 ID 가 이미 처리됨 → 200 (중복 무시)
+- * - 처리 중 오류 → 500 (Stripe 가 재시도, 순서가 뒤바뀐 이벤트도 재시도로 해소)
++ * PayPal 웹훅 처리.
++ * - 서명 검증은 PayPal verify-webhook-signature API 로 한다(실패/불일치 → 400, 처리하지 않음)
++ * - 같은 이벤트 ID 를 이미 처리했으면 200(멱등)
++ * - 처리 중 오류 → 500(PayPal 이 재시도한다. 웹훅이 연결보다 먼저 도착하는 경우도 재시도로 해결)
+  */
+-export async function handleStripeWebhook(db: D1Like, rawBody: string, sigHeader: string | null, secret: string, nowMs: number): Promise<WebhookResponse> {
+-  const v = await verifyStripeSignature(rawBody, sigHeader, secret, nowMs);
+-  if (!v.ok) return { status: 400, body: `invalid signature: ${v.reason}` };
+-  const event = v.event;
++export async function handlePayPalWebhook(db: D1Like, paypal: PayPalPort, rawBody: string, headers: WebhookHeaders, webhookId: string, nowMs: number): Promise<WebhookResponse> {
++  let event: PayPalEvent;
++  try { event = JSON.parse(rawBody) as PayPalEvent; } catch { return { status: 400, body: "bad_json" }; }
++  if (typeof event?.id !== "string" || typeof event?.event_type !== "string" || typeof event.resource !== "object" || event.resource === null) return { status: 400, body: "bad_event" };
++
++  let ok = false;
++  try { ok = await paypal.verifyWebhook({ headers, webhookId, rawBody }); }
++  catch (e) { return { status: 500, body: "verification_unavailable" }; } // PayPal API 장애 → 재시도 유도
++  if (!ok) return { status: 400, body: "invalid signature" };
+ 
+-  const ins = await db.prepare("INSERT OR IGNORE INTO webhook_events(id,type,payload_json,received_at) VALUES(?,?,?,?)").bind(event.id, event.type, rawBody, nowIso(nowMs)).run();
++  const ins = await db.prepare("INSERT OR IGNORE INTO webhook_events(id,type,payload_json,received_at,provider) VALUES(?,?,?,?,'paypal')").bind(event.id, event.event_type, rawBody, nowIso(nowMs)).run();
+   if (ins.meta.changes === 0) {
+     const prev = await db.prepare("SELECT status FROM webhook_events WHERE id = ?").bind(event.id).first<{ status: string }>();
+     if (prev?.status === "processed" || prev?.status === "ignored") return { status: 200, body: "duplicate" };
+@@ -35,97 +51,81 @@ export async function handleStripeWebhook(db: D1Like, rawBody: string, sigHeader
+   }
+ }
+ 
+-async function dispatch(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  switch (ev.type) {
+-    case "checkout.session.completed": case "checkout.session.async_payment_succeeded": return onCheckoutCompleted(db, ev, nowMs);
+-    case "invoice.paid": return onInvoicePaid(db, ev, nowMs);
+-    case "invoice.payment_failed": return onPaymentFailed(db, ev, nowMs);
+-    case "customer.subscription.updated": return onSubscriptionUpdated(db, ev, nowMs);
+-    case "customer.subscription.deleted": return onSubscriptionDeleted(db, ev, nowMs);
+-    case "charge.refunded": return onChargeRefunded(db, ev, nowMs);
+-    case "charge.dispute.created": return onDisputeCreated(db, ev, nowMs);
++async function dispatch(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  switch (ev.event_type) {
++    case "BILLING.SUBSCRIPTION.ACTIVATED": return onSubscriptionActivated(db, ev, nowMs);
++    case "PAYMENT.SALE.COMPLETED": return onSaleCompleted(db, ev, nowMs);
++    case "BILLING.SUBSCRIPTION.PAYMENT.FAILED": return onPaymentFailed(db, ev, nowMs);
++    case "BILLING.SUBSCRIPTION.SUSPENDED": return onSubscriptionSuspended(db, ev, nowMs);
++    case "BILLING.SUBSCRIPTION.CANCELLED": case "BILLING.SUBSCRIPTION.EXPIRED": return onSubscriptionEnded(db, ev, nowMs);
++    case "PAYMENT.SALE.REFUNDED": case "PAYMENT.CAPTURE.REFUNDED": return onRefunded(db, ev, nowMs);
++    case "PAYMENT.SALE.REVERSED": case "PAYMENT.CAPTURE.REVERSED": return onReversed(db, ev, nowMs);
++    case "CUSTOMER.DISPUTE.CREATED": return onDisputeCreated(db, ev, nowMs);
++    case "PAYMENT.CAPTURE.COMPLETED": return onCaptureCompleted(db, ev, nowMs);
+     default: return false;
+   }
+ }
+ 
+-const findSubByStripe = (db: D1Like, id: string | null | undefined) =>
+-  id ? db.prepare("SELECT id,customer_id,status,stripe_subscription_id FROM subscriptions WHERE stripe_subscription_id = ?").bind(id).first<Sub>() : Promise.resolve(null);
++const SUB_COLS = "id,customer_id,status,paypal_subscription_id,current_period_end";
++const findSubByPayPal = (db: D1Like, id: string | null | undefined) =>
++  id ? db.prepare(`SELECT ${SUB_COLS} FROM subscriptions WHERE paypal_subscription_id = ?`).bind(id).first<Sub>() : Promise.resolve(null);
++const findSubById = (db: D1Like, id: string | null | undefined) =>
++  id ? db.prepare(`SELECT ${SUB_COLS} FROM subscriptions WHERE id = ?`).bind(id).first<Sub>() : Promise.resolve(null);
+ 
+ function jobStmt(db: D1Like, kind: string, subId: string, idemKey: string, nowMs: number) {
+   return db.prepare("INSERT OR IGNORE INTO deployment_jobs(id,kind,subscription_id,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?,?)")
+     .bind(newId("job"), kind, subId, idemKey, nowIso(nowMs), nowIso(nowMs));
+ }
+ 
+-/**
+- * 구독 결제(mode=subscription): 우리 구독 행과 Stripe 구독 ID 만 연결한다(활성화는 invoice.paid 에서).
+- * 도메인 결제(mode=payment, metadata.domain_order_id): 결제 완료(payment_status=paid)일 때만 주문을 '결제됨'으로 바꾸고 등록 작업을 만든다.
+- */
+-async function onCheckoutCompleted(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  const s = ev.data.object;
+-  const orderId: string | undefined = s.metadata?.domain_order_id;
+-  if (s.mode === "payment" && orderId) return onDomainPayment(db, s, orderId, nowMs);
+-  const ourId: string | undefined = s.metadata?.cloudpress_subscription_id;
+-  if (s.mode !== "subscription" || !ourId || !s.subscription) return false;
+-  const r = await db.prepare("UPDATE subscriptions SET stripe_subscription_id = ?, stripe_customer_id = COALESCE(stripe_customer_id, ?), updated_at = ? WHERE id = ? AND (stripe_subscription_id IS NULL OR stripe_subscription_id = ?)")
+-    .bind(s.subscription, s.customer ?? null, nowIso(nowMs), ourId, s.subscription).run();
+-  if (r.meta.changes === 0) throw new Error(`cannot link checkout to subscription ${ourId}`);
+-  return true;
++/** 구독 ID 로 우리 구독을 찾는다. PayPal 구독 ID 가 아직 연결 전이면 custom_id(우리 구독 ID)로 찾는다. */
++async function resolveSub(db: D1Like, paypalSubId: string | null | undefined, customId: string | null | undefined): Promise<Sub | null> {
++  return (await findSubByPayPal(db, paypalSubId)) ?? (await findSubById(db, customId));
+ }
+ 
+-async function onDomainPayment(db: D1Like, s: Record<string, any>, orderId: string, nowMs: number): Promise<boolean> {
+-  if (s.payment_status !== "paid") return false; // 지연 결제수단: async_payment_succeeded 에서 처리
+-  const o = await db.prepare("SELECT id,customer_id,charge_currency,charge_amount,fx_rate_micro,price_micro FROM domain_orders WHERE id = ?").bind(orderId).first<{ id: string; customer_id: string; charge_currency: "USD" | "KRW"; charge_amount: number | null; fx_rate_micro: number | null; price_micro: number }>();
+-  if (!o) throw new Error(`domain order not found: ${orderId}`);
+-  const cur = parseCurrency(s.currency);
+-  const minor = Number(s.amount_total ?? 0);
+-  // 청구 통화·금액이 견적과 다르면 등록하지 않는다(변조·설정 오류 방지). 운영자가 확인할 수 있게 오류로 남긴다.
+-  if (cur !== o.charge_currency || (o.charge_amount !== null && minor !== o.charge_amount)) throw new Error(`domain payment mismatch for ${orderId}: ${cur} ${minor} != ${o.charge_currency} ${o.charge_amount}`);
+-  const pi: string = s.payment_intent;
+-  if (!pi) throw new Error("payment_intent missing");
+-  const result = await markPaid(db, orderId, pi, nowMs);
+-  await db.batch([
+-    db.prepare("INSERT OR IGNORE INTO payments(id,customer_id,stripe_payment_intent_id,amount_micro,status,paid_at,created_at,currency,amount_minor,fx_rate_micro) VALUES(?,?,?,?,?,?,?,?,?,?)")
+-      .bind(`pay_${pi}`, o.customer_id, pi, o.price_micro, "succeeded", nowIso(nowMs), nowIso(nowMs), cur, minor, cur === "KRW" ? o.fx_rate_micro : null),
+-    ...(result === "paid" ? [db.prepare("INSERT OR IGNORE INTO deployment_jobs(id,kind,idempotency_key,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)").bind(newId("job"), "register_domain", `register:${orderId}`, JSON.stringify({ orderId }), nowIso(nowMs), nowIso(nowMs))] : []),
+-  ]);
++/** 구독 승인(ACTIVATED): 우리 구독과 PayPal 구독을 연결한다. 서비스 활성화는 결제 확정(SALE.COMPLETED)에서만 한다. */
++async function onSubscriptionActivated(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const r = ev.resource;
++  const ourId: string | undefined = r.custom_id;
++  if (!ourId || typeof r.id !== "string") return false;
++  const res = await db.prepare("UPDATE subscriptions SET paypal_subscription_id = ?, updated_at = ? WHERE id = ? AND (paypal_subscription_id IS NULL OR paypal_subscription_id = ?)").bind(r.id, nowIso(nowMs), ourId, r.id).run();
++  if (res.meta.changes === 0) throw new Error(`cannot link paypal subscription to ${ourId}`);
+   return true;
+ }
+ 
+-async function onInvoicePaid(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  const inv = ev.data.object;
+-  const sub = await findSubByStripe(db, inv.subscription);
+-  if (!sub) throw new Error(`subscription not linked yet: ${inv.subscription}`); // 순서 역전 → 재시도
+-  const cur = parseCurrency(inv.currency);
+-  const minor = Number(inv.amount_paid ?? 0);
+-  const fx = cur === "KRW" ? await latestFxRate(db) : null; // 환율이 없으면 오류 → Stripe 재시도(금액을 추정해 기록하지 않음)
+-  const amountMicro = minorToMicro(cur, minor, fx);
+-  const period = inv.lines?.data?.[0]?.period;
+-  const invoiceId = `inv_${inv.id}`;
++async function onSaleCompleted(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const sale = ev.resource;
++  if (String(sale.state).toLowerCase() !== "completed") return false;
++  const sub = await resolveSub(db, sale.billing_agreement_id, sale.custom ?? sale.custom_id);
++  if (!sub) throw new Error(`subscription not linked yet: ${sale.billing_agreement_id}`); // 연결 전 도착 → 재시도
++  if (String(sale.amount?.currency).toUpperCase() !== "USD") throw new Error(`unsupported currency: ${sale.amount?.currency}`);
++  const cents = valueToCents(sale.amount?.total);
++  const micro = cents * MICRO_PER_CENT;
++  const periodStart = nowMs;
++  const periodEnd = addMonthUtc(nowMs);
++  const invoiceId = `inv_${sale.id}`;
+   const stmts = [
+-    db.prepare("INSERT OR IGNORE INTO invoices(id,subscription_id,customer_id,stripe_invoice_id,status,subtotal_micro,total_micro,currency,total_minor,period_start,period_end,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+-      .bind(invoiceId, sub.id, sub.customer_id, inv.id, "paid", amountMicro, amountMicro, cur, minor, period ? nowIso(period.start * 1000) : null, period ? nowIso(period.end * 1000) : null, nowIso(nowMs)),
+-    db.prepare("INSERT OR IGNORE INTO payments(id,invoice_id,customer_id,stripe_payment_intent_id,stripe_charge_id,amount_micro,status,paid_at,created_at,currency,amount_minor,fx_rate_micro) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+-      .bind(`pay_${inv.id}`, invoiceId, sub.customer_id, inv.payment_intent ?? null, inv.charge ?? null, amountMicro, "succeeded", nowIso(nowMs), nowIso(nowMs), cur, minor, fx),
++    db.prepare("INSERT OR IGNORE INTO invoices(id,subscription_id,customer_id,paypal_sale_id,status,subtotal_micro,total_micro,currency,total_minor,period_start,period_end,created_at) VALUES(?,?,?,?,?,?,?,'USD',?,?,?,?)")
++      .bind(invoiceId, sub.id, sub.customer_id, sale.id, "paid", micro, micro, cents, nowIso(periodStart), nowIso(periodEnd), nowIso(nowMs)),
++    db.prepare("INSERT OR IGNORE INTO payments(id,invoice_id,customer_id,paypal_capture_id,provider,amount_micro,status,paid_at,created_at,currency,amount_minor) VALUES(?,?,?,?,'paypal',?,?,?,?,'USD',?)")
++      .bind(`pay_${sale.id}`, invoiceId, sub.customer_id, sale.id, micro, "succeeded", nowIso(nowMs), nowIso(nowMs), cents),
+   ];
+   if (sub.status !== "active" && sub.status !== "canceling") {
+     assertTransition(SUBSCRIPTION_TRANSITIONS, sub.status, "active");
+-    stmts.push(db.prepare("UPDATE subscriptions SET status='active', current_period_start=?, current_period_end=?, last_invoice_id=?, updated_at=? WHERE id=?")
+-      .bind(period ? nowIso(period.start * 1000) : null, period ? nowIso(period.end * 1000) : null, invoiceId, nowIso(nowMs), sub.id));
+-    // 최초 활성화만 프로비저닝. 같은 구독의 중복 생성은 UNIQUE 멱등 키가 막는다.
+-    stmts.push(jobStmt(db, sub.status === "incomplete" ? "provision" : "resume", sub.id, sub.status === "incomplete" ? `provision:${sub.id}` : `resume:${sub.id}:${inv.id}`, nowMs));
++    stmts.push(db.prepare("UPDATE subscriptions SET status='active', current_period_start=?, current_period_end=?, last_invoice_id=?, updated_at=? WHERE id=?").bind(nowIso(periodStart), nowIso(periodEnd), invoiceId, nowIso(nowMs), sub.id));
++    // 첫 결제는 프로비저닝, 정지/연체 복구는 재개 작업. 같은 결제가 다시 와도 UNIQUE 키로 중복 생성되지 않는다.
++    stmts.push(jobStmt(db, sub.status === "incomplete" ? "provision" : "resume", sub.id, sub.status === "incomplete" ? `provision:${sub.id}` : `resume:${sub.id}:${sale.id}`, nowMs));
+   } else {
+-    stmts.push(db.prepare("UPDATE subscriptions SET current_period_start=?, current_period_end=?, last_invoice_id=?, updated_at=? WHERE id=?")
+-      .bind(period ? nowIso(period.start * 1000) : null, period ? nowIso(period.end * 1000) : null, invoiceId, nowIso(nowMs), sub.id));
++    stmts.push(db.prepare("UPDATE subscriptions SET current_period_start=?, current_period_end=?, last_invoice_id=?, updated_at=? WHERE id=?").bind(nowIso(periodStart), nowIso(periodEnd), invoiceId, nowIso(nowMs), sub.id));
+   }
+   await db.batch(stmts);
+   return true;
+ }
+ 
+-async function onPaymentFailed(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  const sub = await findSubByStripe(db, ev.data.object.subscription);
++async function onPaymentFailed(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const sub = await resolveSub(db, ev.resource.id, ev.resource.custom_id);
+   if (!sub) throw new Error("subscription not linked yet");
+   const stmts = [db.prepare("INSERT INTO notifications(id,user_id,severity,title,body,created_at) VALUES(?,?,?,?,?,?)")
+-    .bind(newId("ntf"), sub.customer_id, "warning", "결제 실패", "결제에 실패했습니다. 결제 수단을 확인해 주세요.", nowIso(nowMs))];
++    .bind(newId("ntf"), sub.customer_id, "warning", "결제 실패", "결제에 실패했습니다. PayPal 결제 수단을 확인해 주세요.", nowIso(nowMs))];
+   if (sub.status === "active") {
+     assertTransition(SUBSCRIPTION_TRANSITIONS, "active", "past_due");
+     stmts.push(db.prepare("UPDATE subscriptions SET status='past_due', updated_at=? WHERE id=?").bind(nowIso(nowMs), sub.id));
+@@ -134,64 +134,93 @@ async function onPaymentFailed(db: D1Like, ev: StripeEvent, nowMs: number): Prom
+   return true;
+ }
+ 
+-const STRIPE_STATUS_MAP: Record<string, SubscriptionState | undefined> = { active: "active", past_due: "past_due", unpaid: "suspended", canceled: "canceled" };
+-
+-async function onSubscriptionUpdated(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  const o = ev.data.object;
+-  const sub = await findSubByStripe(db, o.id);
++async function onSubscriptionSuspended(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const sub = await resolveSub(db, ev.resource.id, ev.resource.custom_id);
+   if (!sub) throw new Error("subscription not linked yet");
+-  let next: SubscriptionState = sub.status;
+-  const mapped = STRIPE_STATUS_MAP[o.status];
+-  if (mapped && mapped !== sub.status && sub.status !== "incomplete") { // 활성화는 invoice.paid 가 담당
+-    try { assertTransition(SUBSCRIPTION_TRANSITIONS, sub.status, mapped); next = mapped; } catch { /* 허용되지 않는 전이는 무시 */ }
+-  }
+-  if (o.cancel_at_period_end && next === "active") next = "canceling";
+-  if (!o.cancel_at_period_end && next === "canceling") next = "active";
+-  await db.prepare("UPDATE subscriptions SET status=?, cancel_at_period_end=?, current_period_start=COALESCE(?,current_period_start), current_period_end=COALESCE(?,current_period_end), updated_at=? WHERE id=?")
+-    .bind(next, o.cancel_at_period_end ? 1 : 0, o.current_period_start ? nowIso(o.current_period_start * 1000) : null, o.current_period_end ? nowIso(o.current_period_end * 1000) : null, nowIso(nowMs), sub.id).run();
++  if (sub.status !== "active" && sub.status !== "past_due") return true;
++  assertTransition(SUBSCRIPTION_TRANSITIONS, sub.status, "suspended");
++  await db.batch([db.prepare("UPDATE subscriptions SET status='suspended', updated_at=? WHERE id=?").bind(nowIso(nowMs), sub.id), jobStmt(db, "suspend", sub.id, `suspend:${sub.id}:paypal_suspended:${ev.id}`, nowMs)]);
+   return true;
+ }
+ 
+-async function onSubscriptionDeleted(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  const sub = await findSubByStripe(db, ev.data.object.id);
++/**
++ * 구독 종료(취소/만료). PayPal 은 취소 즉시 이 이벤트를 보낸다.
++ * 이미 이용 기간이 남아 있으면 기간 종료까지 'canceling' 으로 두고(스케줄러가 확정), 남은 기간이 없으면 바로 canceled.
++ */
++async function onSubscriptionEnded(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const sub = await resolveSub(db, ev.resource.id, ev.resource.custom_id);
+   if (!sub) throw new Error("subscription not linked yet");
+-  if (sub.status === "canceled" || sub.status === "refunded") return true;
++  if (sub.status === "canceled" || sub.status === "refunded" || sub.status === "canceling") return true;
++  const hasTimeLeft = sub.current_period_end !== null && Date.parse(sub.current_period_end) > nowMs;
++  if (sub.status === "incomplete") {
++    await db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE id=?").bind(nowIso(nowMs), sub.id).run();
++    return true;
++  }
++  if (hasTimeLeft && sub.status === "active") {
++    assertTransition(SUBSCRIPTION_TRANSITIONS, "active", "canceling");
++    await db.prepare("UPDATE subscriptions SET status='canceling', cancel_at_period_end=1, updated_at=? WHERE id=?").bind(nowIso(nowMs), sub.id).run();
++    return true;
++  }
+   assertTransition(SUBSCRIPTION_TRANSITIONS, sub.status, "canceled");
+-  // 자원 삭제는 즉시 하지 않는다: 'suspend' 작업만 만들고, 데이터는 유예 기간 후 별도 2단계 확인으로 삭제한다.
++  await db.batch([db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE id=?").bind(nowIso(nowMs), sub.id), jobStmt(db, "suspend", sub.id, `suspend:${sub.id}:canceled`, nowMs)]);
++  return true;
++}
++
++/* ───────── 도메인(일회성) 결제 ───────── */
++
++/** 캡처 완료를 도메인 주문에 반영한다. 금액·통화가 주문과 다르면 거부한다(웹훅과 리턴 URL 양쪽에서 쓰며 멱등). */
++export async function applyDomainCapture(db: D1Like, orderId: string, captureId: string, currency: string, amountMinor: number, nowMs: number): Promise<void> {
++  const o = await db.prepare("SELECT id,customer_id,charge_currency,charge_amount,price_micro FROM domain_orders WHERE id = ?").bind(orderId).first<{ id: string; customer_id: string; charge_currency: string; charge_amount: number | null; price_micro: number }>();
++  if (!o) throw new Error(`domain order not found: ${orderId}`);
++  if (currency.toUpperCase() !== "USD" || o.charge_currency !== "USD" || (o.charge_amount !== null && amountMinor !== o.charge_amount)) throw new Error(`domain payment mismatch for ${orderId}: ${currency} ${amountMinor} != ${o.charge_currency} ${o.charge_amount}`);
++  const result = await markPaid(db, orderId, captureId, nowMs);
+   await db.batch([
+-    db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE id=?").bind(nowIso(nowMs), sub.id),
+-    jobStmt(db, "suspend", sub.id, `suspend:${sub.id}:canceled`, nowMs),
++    db.prepare("INSERT OR IGNORE INTO payments(id,customer_id,paypal_capture_id,provider,amount_micro,status,paid_at,created_at,currency,amount_minor) VALUES(?,?,?,'paypal',?,?,?,?,'USD',?)")
++      .bind(`pay_${captureId}`, o.customer_id, captureId, o.price_micro, "succeeded", nowIso(nowMs), nowIso(nowMs), amountMinor),
++    ...(result === "paid" ? [db.prepare("INSERT OR IGNORE INTO deployment_jobs(id,kind,idempotency_key,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?)").bind(newId("job"), "register_domain", `register:${orderId}`, JSON.stringify({ orderId }), nowIso(nowMs), nowIso(nowMs))] : []),
+   ]);
++}
++
++async function onCaptureCompleted(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const c = ev.resource;
++  if (String(c.status).toUpperCase() !== "COMPLETED") return false;
++  const orderId: string | undefined = c.custom_id;
++  if (!orderId) return false;
++  const exists = await db.prepare("SELECT 1 AS x FROM domain_orders WHERE id = ?").bind(orderId).first();
++  if (!exists) return false; // 구독 결제 등 도메인 주문이 아닌 캡처
++  await applyDomainCapture(db, orderId, c.id, c.amount?.currency_code ?? "", valueToCents(c.amount?.value), nowMs);
+   return true;
+ }
+ 
+-type Pay = { id: string; customer_id: string; amount_micro: number; invoice_id: string | null; currency: "USD" | "KRW"; amount_minor: number | null; fx_rate_micro: number | null };
+-const findPayment = (db: D1Like, charge: string | null | undefined, pi: string | null | undefined) =>
+-  db.prepare("SELECT id,customer_id,amount_micro,invoice_id,currency,amount_minor,fx_rate_micro FROM payments WHERE (stripe_charge_id IS NOT NULL AND stripe_charge_id = ?) OR (stripe_payment_intent_id IS NOT NULL AND stripe_payment_intent_id = ?)")
+-    .bind(charge ?? null, pi ?? null).first<Pay>();
+-
+-async function subOfPayment(db: D1Like, p: Pay) {
+-  return p.invoice_id ? db.prepare("SELECT s.id,s.customer_id,s.status,s.stripe_subscription_id FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id WHERE i.id = ?").bind(p.invoice_id).first<Sub>() : null;
+-}
+-
+-async function onChargeRefunded(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  const c = ev.data.object;
+-  const pay = await findPayment(db, c.id, c.payment_intent);
+-  if (!pay) throw new Error(`payment not found for charge ${c.id}`);
+-  const toMicro = (minor: number) => minorToMicro(pay.currency, minor, pay.fx_rate_micro); // 결제 때의 환율로 환산(환불 시점 환율 변동 영향 없음)
+-  const totalRefundedMinor = Number(c.amount_refunded ?? 0);
+-  const totalRefundedMicro = toMicro(totalRefundedMinor);
+-  const full = pay.amount_minor !== null ? totalRefundedMinor >= pay.amount_minor : totalRefundedMicro >= pay.amount_micro;
+-  const stmts = [];
+-  const list: Array<{ id: string; amount: number; reason?: string }> = c.refunds?.data ?? [];
+-  if (list.length > 0) {
+-    for (const r of list) stmts.push(db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,stripe_refund_id,amount_micro,reason,kind,created_at) VALUES(?,?,?,?,?,'refund',?)")
+-      .bind(`ref_${r.id}`, pay.id, r.id, toMicro(r.amount), r.reason ?? null, nowIso(nowMs)));
+-  } else if (totalRefundedMicro > 0) {
+-    // 최신 API 는 refunds 목록을 기본 포함하지 않는다. 누적액 기준 합성 행을 남기고 대조 작업(reconcile)이 실제 환불 ID 로 보정한다.
+-    stmts.push(db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,amount_micro,kind,created_at) VALUES(?,?,?,'refund',?)").bind(`ref_total_${c.id}_${c.amount_refunded}`, pay.id, totalRefundedMicro, nowIso(nowMs)));
+-  }
+-  stmts.push(db.prepare("UPDATE payments SET status=? WHERE id=?").bind(full ? "refunded" : "partially_refunded", pay.id));
++/* ───────── 환불 · 분쟁 ───────── */
++
++type Pay = { id: string; customer_id: string; amount_micro: number; invoice_id: string | null };
++const findPaymentByRef = (db: D1Like, ref: string | null | undefined) =>
++  ref ? db.prepare("SELECT id,customer_id,amount_micro,invoice_id FROM payments WHERE paypal_capture_id = ?").bind(ref).first<Pay>() : Promise.resolve(null);
++
++async function subOfPayment(db: D1Like, p: Pay): Promise<Sub | null> {
++  return p.invoice_id ? db.prepare(`SELECT s.id,s.customer_id,s.status,s.paypal_subscription_id,s.current_period_end FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id WHERE i.id = ?`).bind(p.invoice_id).first<Sub>() : null;
++}
++
++/** 환불 이벤트에서 원 결제(sale/capture) ID 를 찾는다. */
++function refundedParentId(ev: PayPalEvent): string | undefined {
++  const r = ev.resource;
++  if (typeof r.sale_id === "string") return r.sale_id; // PAYMENT.SALE.REFUNDED
++  const up = (r.links as { rel: string; href: string }[] | undefined)?.find((l) => l.rel === "up")?.href; // PAYMENT.CAPTURE.REFUNDED
++  return up ? up.split("/").pop() : undefined;
++}
++
++async function onRefunded(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const r = ev.resource;
++  const parent = refundedParentId(ev);
++  const pay = await findPaymentByRef(db, parent);
++  if (!pay) throw new Error(`payment not found for refund ${r.id} (parent ${parent})`);
++  const cents = valueToCents(r.amount?.total ?? r.amount?.value);
++  const micro = cents * MICRO_PER_CENT;
++  await db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,paypal_refund_id,amount_micro,reason,kind,created_at) VALUES(?,?,?,?,?,'refund',?)").bind(`ref_${r.id}`, pay.id, r.id, micro, r.note_to_payer ?? r.reason_code ?? null, nowIso(nowMs)).run();
++  const sum = await db.prepare("SELECT COALESCE(SUM(amount_micro),0) AS s FROM refunds WHERE payment_id = ? AND kind = 'refund'").bind(pay.id).first<{ s: number }>();
++  const full = (sum?.s ?? 0) >= pay.amount_micro;
++  const stmts = [db.prepare("UPDATE payments SET status=? WHERE id=?").bind(full ? "refunded" : "partially_refunded", pay.id)];
+   const sub = await subOfPayment(db, pay);
+   if (full && sub && sub.status === "active") {
+     assertTransition(SUBSCRIPTION_TRANSITIONS, "active", "refunded");
+@@ -202,21 +231,33 @@ async function onChargeRefunded(db: D1Like, ev: StripeEvent, nowMs: number): Pro
+   return true;
+ }
+ 
+-async function onDisputeCreated(db: D1Like, ev: StripeEvent, nowMs: number): Promise<boolean> {
+-  const d = ev.data.object;
+-  const pay = await findPayment(db, d.charge, d.payment_intent);
+-  if (!pay) throw new Error(`payment not found for dispute ${d.id}`);
++async function markChargeback(db: D1Like, pay: Pay, refKey: string, reason: string | null, nowMs: number): Promise<void> {
+   const stmts = [
+-    db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,amount_micro,reason,kind,created_at) VALUES(?,?,?,?,'chargeback',?)").bind(`cb_${d.id}`, pay.id, minorToMicro(pay.currency, Number(d.amount ?? 0), pay.fx_rate_micro), d.reason ?? null, nowIso(nowMs)),
++    db.prepare("INSERT OR IGNORE INTO refunds(id,payment_id,amount_micro,reason,kind,created_at) VALUES(?,?,?,?,'chargeback',?)").bind(`cb_${refKey}`, pay.id, pay.amount_micro, reason, nowIso(nowMs)),
+     db.prepare("UPDATE payments SET status='disputed' WHERE id=?").bind(pay.id),
+-    db.prepare("INSERT INTO notifications(id,audience,severity,title,body,created_at) VALUES(?,?,?,?,?,?)").bind(newId("ntf"), "operator", "critical", "결제 분쟁 발생", `dispute ${d.id}`, nowIso(nowMs)),
++    db.prepare("INSERT INTO notifications(id,audience,severity,title,body,created_at) VALUES(?,?,?,?,?,?)").bind(newId("ntf"), "operator", "critical", "결제 분쟁/취소 발생", `PayPal ${refKey}`, nowIso(nowMs)),
+   ];
+   const sub = await subOfPayment(db, pay);
+   if (sub && (sub.status === "active" || sub.status === "past_due")) {
+     assertTransition(SUBSCRIPTION_TRANSITIONS, sub.status, "suspended");
+     stmts.push(db.prepare("UPDATE subscriptions SET status='suspended', updated_at=? WHERE id=?").bind(nowIso(nowMs), sub.id));
+-    stmts.push(jobStmt(db, "suspend", sub.id, `suspend:${sub.id}:dispute:${d.id}`, nowMs));
++    stmts.push(jobStmt(db, "suspend", sub.id, `suspend:${sub.id}:dispute:${refKey}`, nowMs));
+   }
+   await db.batch(stmts);
++}
++
++async function onReversed(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const pay = await findPaymentByRef(db, ev.resource.id);
++  if (!pay) throw new Error(`payment not found for reversal ${ev.resource.id}`);
++  await markChargeback(db, pay, String(ev.resource.id), "reversed", nowMs);
++  return true;
++}
++
++async function onDisputeCreated(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
++  const d = ev.resource;
++  const tx: string | undefined = d.disputed_transactions?.[0]?.seller_transaction_id;
++  const pay = await findPaymentByRef(db, tx);
++  if (!pay) throw new Error(`payment not found for dispute ${d.dispute_id ?? d.id}`);
++  await markChargeback(db, pay, String(d.dispute_id ?? d.id), d.reason ?? null, nowMs);
+   return true;
+ }
+diff --git a/src/runtime.ts b/src/runtime.ts
+index b8b0f99..1532064 100644
+--- a/src/runtime.ts
++++ b/src/runtime.ts
+@@ -1,5 +1,5 @@
+ import type { Env } from "./worker";
+-import { StripeHttp, MockStripe, type StripePort } from "./lib/stripe.client";
++import { PayPalHttp, MockPayPal, type PayPalPort } from "./lib/paypal.client";
+ import { CfClient } from "./lib/cfApi";
+ import { CloudflareRegistrar, MockRegistrar, type RegistrarPort, type NameserverPort } from "./lib/registrar";
+ import { GabiaRegistrar, MockGabiaClient, type PortMap } from "./lib/registrarRouter";
+@@ -12,7 +12,9 @@ export class ConfigError extends Error {}
+ 
+ export interface Runtime {
+   mode: "mock" | "live";
+-  stripe: StripePort;
++  paypal: PayPalPort;
++  /** PayPal 환경(sandbox|live). 고객 자동결제 관리 링크 등에 쓴다. */
++  paypalEnv: "sandbox" | "live";
+   ports: PortMap;
+   portFor(provider: string): RegistrarPort;
+   nsPortFor(provider: string): NameserverPort;
+@@ -34,11 +36,11 @@ export function buildRuntime(env: Env): Runtime {
+     if (!mock) {
+       const cf = new MockRegistrar(); const gc = new MockGabiaClient(); const gabia = new GabiaRegistrar(gc);
+       const crypto: Crypto = { encrypt: (p, a) => encryptSecret(p, DEV_ONLY_KEY, a), decrypt: (t, a) => decryptSecret(t, DEV_ONLY_KEY, a) };
+-      mock = { mode: "mock", stripe: new MockStripe(), ports: { cloudflare: cf, gabia }, portFor: (p) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones: new MockZones(), crypto, provisioner: { provision: async () => {}, suspend: async () => {}, resume: async () => {} } };
++      mock = { mode: "mock", paypal: new MockPayPal(), paypalEnv: "sandbox", ports: { cloudflare: cf, gabia }, portFor: (p) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones: new MockZones(), crypto, provisioner: { provision: async () => {}, suspend: async () => {}, resume: async () => {} } };
+     }
+     return mock;
+   }
+-  const missing = (["STRIPE_SECRET_KEY", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "SECRETS_ENCRYPTION_KEY"] as const).filter((k) => !env[k]);
++  const missing = (["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET", "PAYPAL_WEBHOOK_ID", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "SECRETS_ENCRYPTION_KEY"] as const).filter((k) => !env[k]);
+   if (missing.length) throw new ConfigError(`live 모드에 필요한 비밀 값이 없음: ${missing.join(", ")}`);
+   const cf = new CfClient({ token: env.CLOUDFLARE_API_TOKEN!, accountId: env.CLOUDFLARE_ACCOUNT_ID! });
+   const registrar = new CloudflareRegistrar(cf);
+@@ -46,7 +48,8 @@ export function buildRuntime(env: Env): Runtime {
+   const key = env.SECRETS_ENCRYPTION_KEY!;
+   return {
+     mode: "live",
+-    stripe: new StripeHttp({ secretKey: env.STRIPE_SECRET_KEY!, apiVersion: env.STRIPE_API_VERSION }),
++    paypal: new PayPalHttp({ clientId: env.PAYPAL_CLIENT_ID!, clientSecret: env.PAYPAL_CLIENT_SECRET!, env: env.PAYPAL_ENV === "sandbox" ? "sandbox" : "live" }),
++    paypalEnv: env.PAYPAL_ENV === "sandbox" ? "sandbox" : "live",
+     ports: { cloudflare: registrar }, // 가비아는 설정 후에만 라우팅 대상에 포함
+     portFor: (p) => (p === "gabia" ? gabia : registrar),
+     nsPortFor: (p) => (p === "gabia" ? gabia : { setNameservers: async () => {} }),
+diff --git a/src/worker.ts b/src/worker.ts
+index 3168253..8f44350 100644
+--- a/src/worker.ts
++++ b/src/worker.ts
+@@ -1,6 +1,6 @@
+ import { type D1Like, type QueueLike } from "./lib/db";
+ import { registerUser, login, getSession, logout, verifyCsrf, originAllowed, sessionCookie, clearSessionCookie, parseCookie, SESSION_COOKIE } from "./lib/auth";
+-import { handleStripeWebhook } from "./lib/webhooks";
++import { handlePayPalWebhook, paypalWebhookHeaders } from "./lib/webhooks";
+ import { MemoryRateLimiter, type RateLimiter } from "./lib/ratelimit";
+ import { dispatchOutbox } from "./lib/outbox";
+ import { buildRuntime, ConfigError } from "./runtime";
+@@ -20,10 +20,11 @@ export interface Env {
+   JOBS?: QueueLike<{ jobId: string }>;
+   APP_ORIGIN: string;
+   CLOUDPRESS_MODE: "mock" | "live";
+-  STRIPE_WEBHOOK_SECRET?: string;
++  PAYPAL_CLIENT_ID?: string;
++  PAYPAL_CLIENT_SECRET?: string;
++  PAYPAL_WEBHOOK_ID?: string;
++  PAYPAL_ENV?: "sandbox" | "live";
+   SECRETS_ENCRYPTION_KEY?: string;
+-  STRIPE_SECRET_KEY?: string;
+-  STRIPE_API_VERSION?: string;
+   CLOUDFLARE_API_TOKEN?: string;
+   CLOUDFLARE_ACCOUNT_ID?: string;
+   ASSETS: any;
+@@ -79,7 +80,7 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
+       return json({
+         ok: true,
+         mode: env.CLOUDPRESS_MODE,
+-        stripeWebhookConfigured: Boolean(env.STRIPE_WEBHOOK_SECRET),
++        paypalWebhookConfigured: Boolean(env.PAYPAL_WEBHOOK_ID),
+         encryptionKeyConfigured: Boolean(env.SECRETS_ENCRYPTION_KEY),
+         liveIntegrations: [],
+         schemaMissingTable: await schemaReady(env.DB)
+@@ -91,11 +92,13 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
+       if (missing) return json({ error: "schema_not_ready", message: `데이터베이스 마이그레이션이 적용되지 않았습니다(없는 테이블: ${missing}). 운영자가 'wrangler d1 migrations apply'를 실행해야 합니다.` }, 503);
+     }
+ 
+-    if (url.pathname === "/api/webhooks/stripe" && req.method === "POST") {
+-      if (!env.STRIPE_WEBHOOK_SECRET) return json({ error: "webhook_not_configured" }, 503);
++    if (url.pathname === "/api/webhooks/paypal" && req.method === "POST") {
++      const webhookId = env.PAYPAL_WEBHOOK_ID ?? (env.CLOUDPRESS_MODE === "live" ? undefined : "WH-MOCK");
++      if (!webhookId) return json({ error: "webhook_not_configured" }, 503);
+       const raw = await req.text();
+       if (raw.length > 1_000_000) return json({ error: "too_large" }, 413);
+-      const r = await handleStripeWebhook(env.DB, raw, req.headers.get("stripe-signature"), env.STRIPE_WEBHOOK_SECRET, now);
++      const rt = buildRuntime(env);
++      const r = await handlePayPalWebhook(env.DB, rt.paypal, raw, paypalWebhookHeaders(req.headers), webhookId, now);
+       if (r.status === 200 && env.JOBS) await dispatchOutbox(env.DB, env.JOBS, now).catch(() => 0);
+       return new Response(r.body, { status: r.status, headers: SECURITY_HEADERS });
+     }
+@@ -215,7 +218,7 @@ export default {
+     await consumeBatch({
+       db: env.DB,
+       nowMs: Date.now(),
+-      stripe: rt.stripe,
++      paypal: rt.paypal,
+       portFor: rt.portFor,
+       nsPortFor: rt.nsPortFor,
+       zones: rt.zones,
+diff --git a/test/billing.test.ts b/test/billing.test.ts
+deleted file mode 100644
+index 0791744..0000000
+--- a/test/billing.test.ts
++++ /dev/null
+@@ -1,204 +0,0 @@
+-import { describe, it, expect } from "vitest";
+-import { makeDb } from "./helpers/d1";
+-import { usd } from "../src/lib/money";
+-import { encodeForm, StripeHttp, StripeError, MockStripe } from "../src/lib/stripe.client";
+-import { ensureStripeCustomer, ensureStripePrice, createSubscriptionCheckout, createDomainCheckout, createPortal, expireIncompleteSubscriptions } from "../src/lib/checkout";
+-import { handleStripeWebhook } from "../src/lib/webhooks";
+-import { signStripePayload } from "../src/lib/stripe";
+-import { recordFxSample, loadFxState } from "../src/lib/fxStore";
+-import { MockRegistrar } from "../src/lib/registrar";
+-import { MockGabiaClient, GabiaRegistrar } from "../src/lib/registrarRouter";
+-import { createQuoteRouted } from "../src/lib/domainOrders";
+-import { costSideRate } from "../src/lib/fx";
+-import { encryptSecret, decryptSecret, b64urlEncode } from "../src/lib/crypto";
+-
+-const NOW = Date.UTC(2026, 9, 19), SECRET = "whsec_t";
+-const KEY = b64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
+-const crypt = { encrypt: (p: string, a: string) => encryptSecret(p, KEY, a), decrypt: (t: string, a: string) => decryptSecret(t, KEY, a) };
+-const FX = 1_400_000_000;
+-const ctx = { appOrigin: "https://app.test", nowMs: NOW, fxRateMicro: FX as number | null };
+-
+-function world() {
+-  const { db, raw } = makeDb();
+-  raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h'),('u2','b@x.co','h')");
+-  raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
+-  raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('p1','ccs-basic',1,12990000)");
+-  return { db, raw, stripe: new MockStripe() };
+-}
+-let n = 0;
+-const ev = (type: string, object: Record<string, unknown>) => JSON.stringify({ id: `evt_${++n}`, type, created: 1, data: { object } });
+-const send = async (db: any, body: string) => handleStripeWebhook(db, body, await signStripePayload(body, SECRET, NOW), SECRET, NOW);
+-const row = (raw: any, sql: string) => raw.prepare(sql).get() as any;
+-
+-describe("Stripe 요청 형태", () => {
+-  it("form 인코딩: 중첩 객체·배열·특수문자", () => {
+-    expect(encodeForm({ a: 1, b: { c: "x y" }, d: [{ e: 1 }, { e: 2 }], f: ["p", "q"], g: undefined, h: null }).join("&"))
+-      .toBe("a=1&b%5Bc%5D=x%20y&d%5B0%5D%5Be%5D=1&d%5B1%5D%5Be%5D=2&f%5B0%5D=p&f%5B1%5D=q");
+-  });
+-  it("StripeHttp: 인증·멱등 키·본문·오류 변환", async () => {
+-    const calls: any[] = [];
+-    const responses = [{ status: 200, body: { id: "cs_1", url: "https://c" } }, { status: 402, body: { error: { code: "card_declined", message: "declined" } } }, { status: 503, body: { error: { message: "down" } } }];
+-    const f = async (url: string, init: any) => { calls.push({ url, ...init }); const r = responses.shift()!; return { status: r.status, json: async () => r.body }; };
+-    const s = new StripeHttp({ secretKey: "sk_test_x", apiVersion: "2099-01-01", fetch: f });
+-    const out = await s.createCheckoutSession({ mode: "payment", customer: "cus_1", clientReferenceId: "o1", metadata: { domain_order_id: "o1" }, successUrl: "https://s", cancelUrl: "https://c", inline: { currency: "KRW", amountMinor: 15400, name: "도메인" }, expiresAtSec: 1900000000 }, "idem1");
+-    expect(out).toEqual({ id: "cs_1", url: "https://c" });
+-    expect(calls[0].url).toBe("https://api.stripe.com/v1/checkout/sessions");
+-    expect(calls[0].headers).toMatchObject({ Authorization: "Bearer sk_test_x", "Idempotency-Key": "idem1", "Stripe-Version": "2099-01-01", "Content-Type": "application/x-www-form-urlencoded" });
+-    const body = decodeURIComponent(calls[0].body);
+-    for (const part of ["mode=payment", "line_items[0][price_data][currency]=krw", "line_items[0][price_data][unit_amount]=15400", "payment_intent_data[metadata][domain_order_id]=o1", "metadata[domain_order_id]=o1", "expires_at=1900000000"]) expect(body).toContain(part);
+-    const e1 = (await s.createRefund({ paymentIntent: "pi_1" }, "r1").catch((e) => e)) as StripeError;
+-    expect(e1).toMatchObject({ status: 402, code: "card_declined" }); expect(e1.retryable).toBe(false);
+-    expect(((await s.createRefund({ paymentIntent: "pi_1" }, "r2").catch((e) => e)) as StripeError).retryable).toBe(true);
+-    expect(() => new StripeHttp({ secretKey: "pk_live_x" })).toThrow();
+-    const net = new StripeHttp({ secretKey: "sk_test_x", fetch: async () => { throw new Error("socket"); } });
+-    expect(((await net.createCustomer({ email: "a@b.c", metadata: {} }, "i").catch((e) => e)) as StripeError).retryable).toBe(true);
+-  });
+-});
+-
+-describe("체크아웃", () => {
+-  it("고객은 사용자당 1명(멱등), 이미 있으면 재사용", async () => {
+-    const { db, stripe } = world();
+-    const [a, b] = await Promise.all([ensureStripeCustomer(db, stripe, "u1"), ensureStripeCustomer(db, stripe, "u1")]);
+-    expect(a).toBe(b);
+-    expect(await ensureStripeCustomer(db, stripe, "u1")).toBe(a);
+-  });
+-  it("구독 체크아웃(USD): 구독 행 incomplete 생성·가격 버전 고정·메타데이터", async () => {
+-    const { db, raw, stripe } = world();
+-    const r = await createSubscriptionCheckout(db, stripe, "u1", "ccs-basic", "USD", ctx);
+-    expect(r.url).toContain("checkout.stripe.test");
+-    expect(row(raw, "select status s, price_version_id p, stripe_price_id sp from subscriptions")).toMatchObject({ s: "incomplete", p: "p1" });
+-    const call = stripe.calls.find((c) => c.op === "checkout")!;
+-    expect((call.args as any).metadata.cloudpress_subscription_id).toBe(r.subscriptionId);
+-    expect((stripe.calls.find((c) => c.op === "price")!.args as any).amountMinor).toBe(1299);
+-  });
+-  it("KRW 가격은 최초 환율로 100원 올림 확정 후 잠금: 환율이 변해도 기존 가격 유지", async () => {
+-    const { db, stripe } = world();
+-    const a = await ensureStripePrice(db, stripe, "p1", "KRW", FX, NOW);
+-    expect(a.amountMinor).toBe(18200); // 12.99 × 1400 = 18,186 → 100원 올림
+-    const b = await ensureStripePrice(db, stripe, "p1", "KRW", 1_900_000_000, NOW);
+-    expect(b).toEqual(a);
+-    expect(stripe.calls.filter((c) => c.op === "price")).toHaveLength(1);
+-    await expect(ensureStripePrice(db, stripe, "nope", "USD", null, NOW)).rejects.toMatchObject({ code: "not_found" });
+-    const w2 = world();
+-    await expect(ensureStripePrice(w2.db, w2.stripe, "p1", "KRW", null, NOW)).rejects.toMatchObject({ code: "fx_unavailable" });
+-  });
+-  it("새 가격 버전을 내면 새 구독만 새 가격, 기존 구독은 이전 가격 버전 유지", async () => {
+-    const { db, raw, stripe } = world();
+-    const first = await createSubscriptionCheckout(db, stripe, "u1", "ccs-basic", "USD", ctx);
+-    raw.exec("UPDATE prices SET retired_at='2026-10-19T00:00:00Z' WHERE id='p1'");
+-    raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('p2','ccs-basic',2,14990000)");
+-    const second = await createSubscriptionCheckout(db, stripe, "u2", "ccs-basic", "USD", ctx);
+-    const v = (id: string) => row(raw, `select price_version_id p from subscriptions where id='${id}'`).p;
+-    expect(v(first.subscriptionId)).toBe("p1"); expect(v(second.subscriptionId)).toBe("p2");
+-  });
+-  it("판매 중지·없는 상품 거부", async () => {
+-    const { db, raw, stripe } = world();
+-    raw.exec("UPDATE products SET on_sale=0");
+-    await expect(createSubscriptionCheckout(db, stripe, "u1", "ccs-basic", "USD", ctx)).rejects.toMatchObject({ code: "not_for_sale" });
+-    await expect(createSubscriptionCheckout(db, stripe, "u1", "ghost", "USD", ctx)).rejects.toMatchObject({ code: "not_for_sale" });
+-  });
+-  it("방치된 incomplete 구독은 24시간 후 정리, 결제 연결된 것은 유지", async () => {
+-    const { db, raw, stripe } = world();
+-    await createSubscriptionCheckout(db, stripe, "u1", "ccs-basic", "USD", ctx);
+-    raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,stripe_subscription_id,created_at) VALUES('linked','u1','ccs-basic','p1','sub_x','2026-10-01T00:00:00Z')");
+-    expect(await expireIncompleteSubscriptions(db, NOW + 25 * 3_600_000)).toBe(1);
+-    expect(row(raw, "select status s from subscriptions where id='linked'").s).toBe("incomplete");
+-  });
+-  it("포털: 결제 이력 없으면 거부", async () => {
+-    const { db, stripe } = world();
+-    await expect(createPortal(db, stripe, "u1", "https://app.test")).rejects.toMatchObject({ code: "no_customer" });
+-    await ensureStripeCustomer(db, stripe, "u1");
+-    expect((await createPortal(db, stripe, "u1", "https://app.test")).url).toContain("billing.stripe.test");
+-  });
+-});
+-
+-describe("도메인 결제 → 등록 작업", () => {
+-  const contact = { email: "o@x.co", phone: "+82.1012345678", postal_info: { name: "홍", address: { street: "s", city: "c", state: "s", postal_code: "1", country_code: "KR" } } };
+-  async function quoted(cur: "KRW" | "USD" = "KRW") {
+-    const w = world();
+-    const ports = { cloudflare: new MockRegistrar(), gabia: new GabiaRegistrar(new MockGabiaClient()) };
+-    const q = await createQuoteRouted(w.db, ports, crypt, { customerId: "u1", hostname: "shop.com", contact, nowMs: NOW, currency: cur, rate: { smoothedRateMicro: FX, costRateMicro: costSideRate(FX) } });
+-    return { ...w, q };
+-  }
+-  const paidEvent = (q: any, over: Record<string, unknown> = {}) => ev("checkout.session.completed", { mode: "payment", payment_status: "paid", payment_intent: "pi_dom1", currency: q.currency.toLowerCase(), amount_total: q.chargeAmount, metadata: { domain_order_id: q.orderId }, ...over });
+-
+-  it("체크아웃: 본인 주문·유효 견적만, 금액·통화는 견적 고정값", async () => {
+-    const { db, stripe, q } = await quoted();
+-    await createDomainCheckout(db, stripe, "u1", q.orderId, ctx);
+-    const c = stripe.calls.find((x) => x.op === "checkout")!.args as any;
+-    expect(c.inline).toMatchObject({ currency: "KRW", amountMinor: q.chargeAmount });
+-    expect(c.metadata).toEqual({ domain_order_id: q.orderId });
+-    await expect(createDomainCheckout(db, stripe, "u2", q.orderId, ctx)).rejects.toMatchObject({ code: "not_found" }); // 다른 고객
+-    await expect(createDomainCheckout(db, stripe, "u1", q.orderId, { ...ctx, nowMs: NOW + 16 * 60_000 })).rejects.toMatchObject({ code: "quote_expired" });
+-  });
+-  it("결제 완료 웹훅 → 주문 paid + 결제 기록(KRW) + 등록 작업 1개, 재전송·중복 이벤트에도 1개", async () => {
+-    const { db, raw, q } = await quoted();
+-    const body = paidEvent(q);
+-    expect((await send(db, body)).status).toBe(200);
+-    expect((await send(db, body)).body).toBe("duplicate");
+-    expect((await send(db, paidEvent(q))).status).toBe(200); // 다른 이벤트 ID 로 같은 결제가 다시 와도
+-    expect(row(raw, "select status s, stripe_payment_intent_id p from domain_orders")).toMatchObject({ s: "paid", p: "pi_dom1" });
+-    expect(row(raw, "select currency c, amount_minor a, fx_rate_micro f from payments")).toMatchObject({ c: "KRW", a: q.chargeAmount, f: FX });
+-    expect(raw.prepare("select kind, idempotency_key k from deployment_jobs").all()).toEqual([{ kind: "register_domain", k: `register:${q.orderId}` }]);
+-  });
+-  it("금액·통화가 견적과 다르거나 미결제 상태면 등록 작업을 만들지 않음", async () => {
+-    const { db, raw, q } = await quoted();
+-    expect((await send(db, paidEvent(q, { amount_total: 100 }))).status).toBe(500);
+-    expect((await send(db, paidEvent(q, { currency: "usd" }))).status).toBe(500);
+-    expect((await send(db, paidEvent(q, { payment_status: "unpaid" }))).body).toBe("ignored");
+-    expect(raw.prepare("select count(*) c from deployment_jobs").get()).toMatchObject({ c: 0 });
+-    expect(row(raw, "select status s from domain_orders").s).toBe("awaiting_payment");
+-  });
+-  it("지연 결제 수단 성공 이벤트도 동일하게 처리", async () => {
+-    const { db, raw, q } = await quoted();
+-    expect((await send(db, ev("checkout.session.async_payment_succeeded", { mode: "payment", payment_status: "paid", payment_intent: "pi_a", currency: "krw", amount_total: q.chargeAmount, metadata: { domain_order_id: q.orderId } }))).status).toBe(200);
+-    expect(row(raw, "select status s from domain_orders").s).toBe("paid");
+-  });
+-});
+-
+-describe("KRW 인보이스 금액 정확도", () => {
+-  async function setup() {
+-    const w = world();
+-    w.raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,stripe_subscription_id) VALUES('s1','u1','ccs-basic','p1','sub_k')");
+-    return w;
+-  }
+-  const inv = (cur: string, amt: number, id = "in_k1") => ev("invoice.paid", { id, subscription: "sub_k", currency: cur, amount_paid: amt, payment_intent: `pi_${id}`, charge: `ch_${id}`, lines: { data: [{ period: { start: 1_700_000_000, end: 1_702_592_000 } }] } });
+-  it("KRW 인보이스는 원을 환율로 환산해 USD 기준 금액을 기록(센트로 오해하지 않음)", async () => {
+-    const { db, raw } = await setup();
+-    await recordFxSample(db, { rateMicro: FX, fetchedAtMs: NOW, source: "t" }, NOW);
+-    expect((await send(db, inv("krw", 18200))).status).toBe(200);
+-    expect(row(raw, "select currency c, amount_minor a, fx_rate_micro f, amount_micro m from payments")).toMatchObject({ c: "KRW", a: 18200, f: FX, m: Math.floor((18200 * 1e12) / FX) });
+-    expect(row(raw, "select currency c, total_minor t from invoices")).toMatchObject({ c: "KRW", t: 18200 });
+-  });
+-  it("환율이 없으면 금액을 추정하지 않고 실패(재시도)", async () => {
+-    const { db, raw } = await setup();
+-    expect((await send(db, inv("krw", 18200))).status).toBe(500);
+-    expect(raw.prepare("select count(*) c from payments").get()).toMatchObject({ c: 0 });
+-  });
+-  it("지원하지 않는 통화는 실패로 드러남", async () => {
+-    const { db } = await setup();
+-    expect((await send(db, inv("eur", 1000))).status).toBe(500);
+-  });
+-  it("KRW 전액·부분 환불 판정은 결제 통화 기준, 환산은 결제 시 환율 고정", async () => {
+-    const { db, raw } = await setup();
+-    await recordFxSample(db, { rateMicro: FX, fetchedAtMs: NOW, source: "t" }, NOW);
+-    await send(db, ev("checkout.session.completed", { mode: "subscription", subscription: "sub_k", customer: "cus_1", metadata: { cloudpress_subscription_id: "s1" } }));
+-    await send(db, inv("krw", 18200));
+-    await send(db, ev("charge.refunded", { id: "ch_in_k1", payment_intent: "pi_in_k1", amount_refunded: 5000, refunds: { data: [{ id: "re_1", amount: 5000 }] } }));
+-    expect(row(raw, "select status s from payments").s).toBe("partially_refunded");
+-    expect(row(raw, "select amount_micro m from refunds").m).toBe(Math.floor((5000 * 1e12) / FX));
+-    await recordFxSample(db, { rateMicro: 1_450_000_000, fetchedAtMs: NOW + 1000, source: "t2" }, NOW + 1000); // 이후 환율 변동
+-    await send(db, ev("charge.refunded", { id: "ch_in_k1", payment_intent: "pi_in_k1", amount_refunded: 18200, refunds: { data: [{ id: "re_1", amount: 5000 }, { id: "re_2", amount: 13200 }] } }));
+-    expect(row(raw, "select status s from payments").s).toBe("refunded");
+-    expect(row(raw, "select amount_micro m from refunds where stripe_refund_id='re_2'").m).toBe(Math.floor((13200 * 1e12) / FX));
+-  });
+-  it("환율 저장소: 수용·급변 보류가 기록되고 상태가 복원됨", async () => {
+-    const { db, raw } = world();
+-    await recordFxSample(db, { rateMicro: FX, fetchedAtMs: NOW, source: "a" }, NOW);
+-    const q = await recordFxSample(db, { rateMicro: 1_700_000_000, fetchedAtMs: NOW + 1, source: "b" }, NOW + 1);
+-    expect(q.status).toBe("quarantined");
+-    const st = await loadFxState(db);
+-    expect(st.accepted).toHaveLength(1); expect(st.pending?.rateMicro).toBe(1_700_000_000);
+-    expect(raw.prepare("select status from fx_rates order by id").all()).toEqual([{ status: "accepted" }, { status: "quarantined" }]);
+-  });
+-});
+diff --git a/test/helpers/d1.ts b/test/helpers/d1.ts
+index 59d945c..0150bc2 100644
+--- a/test/helpers/d1.ts
++++ b/test/helpers/d1.ts
+@@ -4,7 +4,7 @@ import type { DatabaseSync as DB } from "node:sqlite";
+ import type { D1Like, D1Stmt } from "../../src/lib/db";
+ 
+ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (p: string) => DB };
+-export const MIGRATIONS = ["0001_init.sql", "0002_engines_rail_optimizer.sql", "0003_storage_recycling.sql", "0004_domains_zones.sql", "0005_fx_providers.sql", "0006_stripe_currency_jobs.sql"];
++export const MIGRATIONS = ["0001_init.sql", "0002_engines_rail_optimizer.sql", "0003_storage_recycling.sql", "0004_domains_zones.sql", "0005_fx_providers.sql", "0006_stripe_currency_jobs.sql", "0010_paypal.sql"];
+ export const readMigration = (f: string) => readFileSync(new URL(`../../migrations/${f}`, import.meta.url), "utf8");
+ 
+ class Stmt implements D1Stmt {
+@@ -31,12 +31,12 @@ export function makeDb(): { db: D1Like; raw: DB } {
+   return { db, raw };
+ }
+ 
+-/** 구독 시나리오 시드: 사용자, 상품, 가격 버전, incomplete 구독(Stripe ID 미연결). */
+-export function seedSubscription(raw: DB, opts: { subId?: string; stripeSub?: string | null } = {}) {
++/** 구독 시나리오 시드: 사용자, 상품, 가격 버전, incomplete 구독(PayPal 구독 ID 미연결). */
++export function seedSubscription(raw: DB, opts: { subId?: string; paypalSub?: string | null } = {}) {
+   const subId = opts.subId ?? "sub_1";
+   raw.exec("INSERT OR IGNORE INTO users(id,email,password_hash) VALUES('u1','u1@example.com','x')");
+   raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
+   raw.exec("INSERT OR IGNORE INTO prices(id,product_id,version,monthly_micro) VALUES('price_v1','ccs-basic',1,12990000)");
+-  raw.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,stripe_subscription_id) VALUES(?,?,?,?,?)").run(subId, "u1", "ccs-basic", "price_v1", opts.stripeSub ?? null);
++  raw.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,paypal_subscription_id) VALUES(?,?,?,?,?)").run(subId, "u1", "ccs-basic", "price_v1", opts.paypalSub ?? null);
+   return subId;
+ }
+diff --git a/test/jobs.test.ts b/test/jobs.test.ts
+index fa98757..73f48d3 100644
+--- a/test/jobs.test.ts
++++ b/test/jobs.test.ts
+@@ -1,6 +1,6 @@
+ import { describe, it, expect } from "vitest";
+ import { makeDb } from "./helpers/d1";
+-import { MockStripe, StripeError } from "../src/lib/stripe.client";
++import { MockPayPal, PayPalError } from "../src/lib/paypal.client";
+ import { MockRegistrar } from "../src/lib/registrar";
+ import { MockGabiaClient, GabiaRegistrar } from "../src/lib/registrarRouter";
+ import { MockZones } from "../src/lib/zones";
+@@ -20,11 +20,11 @@ const contact = { email: "o@x.co", phone: "+82.1012345678", postal_info: { name:
+ function world() {
+   const { db, raw } = makeDb();
+   raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h')");
+-  const cf = new MockRegistrar(), gc = new MockGabiaClient(), gabia = new GabiaRegistrar(gc), stripe = new MockStripe(), zones = new MockZones();
+-  const base = { db, stripe, portFor: (p: string) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones, crypto: crypt, provisioner: null } as const;
++  const cf = new MockRegistrar(), gc = new MockGabiaClient(), gabia = new GabiaRegistrar(gc), paypal = new MockPayPal(), zones = new MockZones();
++  const base = { db, paypal, portFor: (p: string) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones, crypto: crypt, provisioner: null } as const;
+   const ctx = (nowMs = NOW, over: Partial<JobContext> = {}): JobContext => ({ ...base, nowMs, ...over });
+   const addJob = (id: string, kind: string, payload = "{}", extra = "") => raw.exec(`INSERT INTO deployment_jobs(id,kind,idempotency_key,payload_json,state${extra ? "," + extra.split("=")[0] : ""}) VALUES('${id}','${kind}','k_${id}','${payload}','queued'${extra ? "," + extra.split("=")[1] : ""})`);
+-  return { db, raw, cf, gc, gabia, stripe, zones, ctx, addJob };
++  return { db, raw, cf, gc, gabia, paypal, zones, ctx, addJob };
+ }
+ const job = (raw: any, id: string) => raw.prepare("select state, attempts, last_error e, next_run_at n from deployment_jobs where id=?").get(id) as any;
+ 
+@@ -72,8 +72,8 @@ describe("작업 처리기", () => {
+     const w = world();
+     const mk = (e: Error): Record<string, Handler> => ({ x: async () => { throw e; } });
+     w.addJob("a", "x"); w.addJob("b", "x");
+-    expect(await processJob(w.ctx(), "a", mk(new StripeError(503, undefined, "down")))).toBe("retrying");
+-    expect(await processJob(w.ctx(), "b", mk(new StripeError(402, "card_declined", "no")))).toBe("dead");
++    expect(await processJob(w.ctx(), "a", mk(new PayPalError(503, undefined, "down")))).toBe("retrying");
++    expect(await processJob(w.ctx(), "b", mk(new PayPalError(402, "card_declined", "no")))).toBe("dead");
+   });
+   it("백오프는 지수 증가·최대 1시간·±20% 분산", () => {
+     expect([1, 2, 3, 4].map((a) => backoffSeconds(a, 0.5))).toEqual([30, 60, 120, 240]);
+@@ -149,25 +149,25 @@ describe("도메인 작업 종단 간", () => {
+     expect(w.raw.prepare("select count(*) c from notifications where audience='operator'").get()).toMatchObject({ c: 1 });
+     expect(w.raw.prepare("select count(*) c from deployment_jobs where kind='refund_domain_order'").get()).toMatchObject({ c: 0 });
+   });
+-  it("환불 작업: 결제 직후 불가 판정 → refund_due → Stripe 환불(멱등 키) → refunded, 재실행해도 1회", async () => {
++  it("환불 작업: 결제 직후 불가 판정 → refund_due → PayPal 환불(멱등 키) → refunded, 재실행해도 1회", async () => {
+     const w = world(); const q = await paidOrder(w, "gone.com"); w.cf.cfg.unavailable = ["gone.com"];
+     expect(await processJob(w.ctx(), "reg")).toBe("succeeded");
+     expect(w.raw.prepare("select status s from domain_orders").get()).toMatchObject({ s: "refund_due" });
+     const refundJob = w.raw.prepare("select id from deployment_jobs where kind='refund_domain_order'").get() as { id: string };
+     expect(await processJob(w.ctx(), refundJob.id)).toBe("succeeded");
+     expect(w.raw.prepare("select status s from domain_orders").get()).toMatchObject({ s: "refunded" });
+-    const refunds = w.stripe.calls.filter((c) => c.op === "refund");
++    const refunds = w.paypal.calls.filter((c) => c.op === "refund");
+     expect(refunds).toHaveLength(1); expect(refunds[0]!.idem).toBe(`refund:${q.orderId}`);
+     w.raw.exec(`UPDATE deployment_jobs SET state='queued', attempts=0 WHERE id='${refundJob.id}'`);
+     expect(await processJob(w.ctx(), refundJob.id)).toBe("succeeded"); // 이미 환불됨 → 추가 호출 없음
+-    expect(w.stripe.calls.filter((c) => c.op === "refund")).toHaveLength(1);
++    expect(w.paypal.calls.filter((c) => c.op === "refund")).toHaveLength(1);
+   });
+   it("환불 작업은 등록 완료 주문을 환불하지 않음(폐기 + 알림)", async () => {
+     const w = world(); const q = await paidOrder(w, "done.com");
+     await processJob(w.ctx(), "reg");
+     w.raw.exec(`INSERT INTO deployment_jobs(id,kind,idempotency_key,payload_json,state) VALUES('rf','refund_domain_order','refund:${q.orderId}','{"orderId":"${q.orderId}"}','queued')`);
+     expect(await processJob(w.ctx(), "rf")).toBe("dead");
+-    expect(w.stripe.calls.some((c) => c.op === "refund")).toBe(false);
++    expect(w.paypal.calls.some((c) => c.op === "refund")).toBe(false);
+   });
+ });
+ 
+diff --git a/test/paypal.test.ts b/test/paypal.test.ts
+new file mode 100644
+index 0000000..1db6bd2
+--- /dev/null
++++ b/test/paypal.test.ts
+@@ -0,0 +1,265 @@
++import { describe, it, expect } from "vitest";
++import { makeDb, seedSubscription } from "./helpers/d1";
++import { PayPalHttp, PayPalError, MockPayPal, centsToValue, valueToCents } from "../src/lib/paypal.client";
++import { ensurePayPalPlan, createSubscriptionCheckout, createDomainCheckout, createPortal, expireIncompleteSubscriptions, finalizeCanceledSubscriptions } from "../src/lib/checkout";
++import { handlePayPalWebhook, applyDomainCapture } from "../src/lib/webhooks";
++
++const NOW = Date.UTC(2026, 9, 25);
++const VALID = { authAlgo: "SHA256withRSA", certUrl: "https://api.paypal.com/c", transmissionId: "t", transmissionSig: MockPayPal.VALID_SIG, transmissionTime: "x" };
++const ctx = { appOrigin: "https://app.test", nowMs: NOW };
++const q = (raw: any, sql: string) => raw.prepare(sql).all() as any[];
++const one = (raw: any, sql: string) => raw.prepare(sql).get() as any;
++
++function world() {
++  const { db, raw } = makeDb();
++  raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h'),('u2','b@x.co','h')");
++  raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
++  raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('price_v1','ccs-basic',1,12990000)");
++  return { db, raw, paypal: new MockPayPal() };
++}
++let n = 0;
++const ev = (event_type: string, resource: Record<string, unknown>, id = `WH-${++n}`) => JSON.stringify({ id, event_type, resource });
++const send = (db: any, body: string, sig = MockPayPal.VALID_SIG, pp = new MockPayPal()) => handlePayPalWebhook(db, pp, body, { ...VALID, transmissionSig: sig }, "WH-ID", NOW);
++const sale = (id = "SALE1", sub = "I-1", total = "12.99") => ev("PAYMENT.SALE.COMPLETED", { id, state: "completed", billing_agreement_id: sub, amount: { total, currency: "USD" } });
++
++describe("PayPal 클라이언트", () => {
++  it("금액 변환은 정수 센트로만(부동소수점 없음)", () => {
++    expect(centsToValue(1299)).toBe("12.99"); expect(centsToValue(5)).toBe("0.05"); expect(centsToValue(700)).toBe("7.00");
++    expect(valueToCents("12.99")).toBe(1299); expect(valueToCents("7")).toBe(700); expect(valueToCents("0.5")).toBe(50);
++    expect(() => valueToCents("abc")).toThrow(); expect(() => centsToValue(1.5)).toThrow();
++  });
++  it("PayPalHttp: 토큰 발급·요청 형식·멱등 키·오류 분류", async () => {
++    const calls: any[] = [];
++    const responses: { status: number; body: any }[] = [
++      { status: 200, body: { access_token: "AT", expires_in: 3600 } },
++      { status: 201, body: { id: "PROD1" } }, { status: 201, body: { id: "P-PLAN1" } },
++      { status: 402, body: { name: "UNPROCESSABLE_ENTITY", message: "no" } },
++      { status: 503, body: { message: "down" } },
++    ];
++    const f = async (url: string, init: any) => { calls.push({ url, ...init }); const r = responses.shift()!; return { status: r.status, json: async () => r.body }; };
++    const pp = new PayPalHttp({ clientId: "cid", clientSecret: "sec", env: "sandbox", fetch: f, now: () => NOW });
++    const plan = await pp.createMonthlyPlan({ name: "CCS Basic", currency: "USD", amountMinor: 1299, customId: "price_v1" }, "price_v1:USD");
++    expect(plan).toEqual({ planId: "P-PLAN1" });
++    expect(calls[0].url).toBe("https://api-m.sandbox.paypal.com/v1/oauth2/token");
++    expect(calls[0].headers.Authorization).toBe(`Basic ${btoa("cid:sec")}`);
++    expect(calls[1].url).toBe("https://api-m.sandbox.paypal.com/v1/catalogs/products");
++    expect(calls[1].headers).toMatchObject({ Authorization: "Bearer AT", "PayPal-Request-Id": "product:price_v1:USD" });
++    const planBody = JSON.parse(calls[2].body);
++    expect(planBody.billing_cycles[0]).toMatchObject({ frequency: { interval_unit: "MONTH", interval_count: 1 }, total_cycles: 0, pricing_scheme: { fixed_price: { value: "12.99", currency_code: "USD" } } });
++    const e1 = (await pp.cancelSubscription("I-1", "x").catch((e) => e)) as PayPalError;
++    expect(e1).toMatchObject({ status: 402 }); expect(e1.retryable).toBe(false);
++    expect(((await pp.cancelSubscription("I-1", "x").catch((e) => e)) as PayPalError).retryable).toBe(true);
++    expect(() => new PayPalHttp({ clientId: "", clientSecret: "" , env: "live" })).toThrow();
++  });
++  it("KRW 는 거부한다(PayPal 은 KRW 미지원)", async () => {
++    await expect(new MockPayPal().createMonthlyPlan({ name: "x", currency: "KRW", amountMinor: 100, customId: "c" }, "i")).rejects.toMatchObject({ status: 400 });
++  });
++  it("verifyWebhook: 인증서 URL 이 paypal.com 이 아니면 API 호출 없이 거부", async () => {
++    let called = false;
++    const pp = new PayPalHttp({ clientId: "a", clientSecret: "b", env: "sandbox", fetch: async () => { called = true; return { status: 200, json: async () => ({ access_token: "t", expires_in: 1, verification_status: "SUCCESS" }) }; } });
++    expect(await pp.verifyWebhook({ headers: { ...VALID, certUrl: "https://evil.example/cert" }, webhookId: "W", rawBody: "{}" })).toBe(false);
++    expect(called).toBe(false);
++  });
++});
++
++describe("체크아웃", () => {
++  it("구독: incomplete 생성, custom_id=우리 구독 ID, 플랜은 가격 버전당 1개만 만든다", async () => {
++    const { db, raw, paypal } = world();
++    const a = await createSubscriptionCheckout(db, paypal, "u1", "ccs-basic", "USD", ctx);
++    const b = await createSubscriptionCheckout(db, paypal, "u1", "ccs-basic", "USD", ctx);
++    expect(a.url).toContain("paypal.test");
++    expect(paypal.calls.filter((c) => c.op === "plan")).toHaveLength(1);
++    const sub = paypal.calls.filter((c) => c.op === "subscription")[0]!.args as any;
++    expect(sub.customId).toBe(a.subscriptionId);
++    expect(sub.email).toBe("a@x.co");
++    expect(q(raw, "select status from subscriptions")).toEqual([{ status: "incomplete" }, { status: "incomplete" }]);
++    expect(a.subscriptionId).not.toBe(b.subscriptionId);
++  });
++  it("KRW·판매중지·없는 상품은 거부", async () => {
++    const { db, raw, paypal } = world();
++    await expect(createSubscriptionCheckout(db, paypal, "u1", "ccs-basic", "KRW", ctx)).rejects.toMatchObject({ code: "currency_unsupported" });
++    raw.exec("UPDATE products SET on_sale = 0");
++    await expect(createSubscriptionCheckout(db, paypal, "u1", "ccs-basic", "USD", ctx)).rejects.toMatchObject({ code: "not_for_sale" });
++    await expect(createSubscriptionCheckout(db, paypal, "u1", "ghost", "USD", ctx)).rejects.toMatchObject({ code: "not_for_sale" });
++  });
++  it("가격 버전이 바뀌어도 기존 구독의 플랜(가격)은 그대로", async () => {
++    const { db, raw, paypal } = world();
++    const first = await createSubscriptionCheckout(db, paypal, "u1", "ccs-basic", "USD", ctx);
++    raw.exec("UPDATE prices SET retired_at='2026-10-01T00:00:00Z' WHERE id='price_v1'");
++    raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('p2','ccs-basic',2,15990000)");
++    const second = await createSubscriptionCheckout(db, paypal, "u2", "ccs-basic", "USD", ctx);
++    const rows = q(raw, "select id, price_version_id, paypal_plan_id from subscriptions order by created_at");
++    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
++    expect(byId[first.subscriptionId].price_version_id).toBe("price_v1");
++    expect(byId[second.subscriptionId].price_version_id).toBe("p2");
++    expect(byId[first.subscriptionId].paypal_plan_id).not.toBe(byId[second.subscriptionId].paypal_plan_id);
++  });
++  it("플랜 금액은 센트 단위여야 한다", async () => {
++    const { db, raw, paypal } = world();
++    raw.exec("UPDATE prices SET monthly_micro = 12995001 WHERE id='price_v1'");
++    await expect(ensurePayPalPlan(db, paypal, "price_v1", "USD", NOW)).rejects.toMatchObject({ code: "bad_price" });
++  });
++  it("고객 포털 대신 PayPal 자동결제 관리 URL", async () => {
++    const { db, paypal } = world();
++    expect((await createPortal(db, paypal, "u1", "https://app.test", "sandbox")).url).toContain("sandbox.paypal.com");
++    expect((await createPortal(db, paypal, "u1", "https://app.test", "live")).url).toBe("https://www.paypal.com/myaccount/autopay/");
++  });
++  it("승인 안 된 incomplete 는 24시간 뒤 정리, 활성 구독은 유지", async () => {
++    const { db, raw } = world();
++    seedSubscription(raw, { subId: "s_old" }); seedSubscription(raw, { subId: "s_act", paypalSub: "I-9" });
++    raw.exec(`UPDATE subscriptions SET created_at='${new Date(NOW - 25 * 3_600_000).toISOString()}'`);
++    raw.exec("UPDATE subscriptions SET status='active' WHERE id='s_act'");
++    expect(await expireIncompleteSubscriptions(db, NOW)).toBe(1);
++    expect(one(raw, "select status from subscriptions where id='s_act'").status).toBe("active");
++  });
++  it("취소 예약 구독은 이용 기간이 끝나면 canceled + suspend 작업 1건", async () => {
++    const { db, raw } = world(); seedSubscription(raw);
++    raw.exec(`UPDATE subscriptions SET status='canceling', current_period_end='${new Date(NOW - 1000).toISOString()}'`);
++    expect(await finalizeCanceledSubscriptions(db, NOW)).toBe(1);
++    expect(await finalizeCanceledSubscriptions(db, NOW)).toBe(0);
++    expect(one(raw, "select status from subscriptions").status).toBe("canceled");
++    expect(q(raw, "select kind from deployment_jobs")).toEqual([{ kind: "suspend" }]);
++  });
++  it("도메인 주문: 견적 만료·상태·금액 검증 후 PayPal 주문 생성", async () => {
++    const { db, raw, paypal } = world();
++    const ins = (id: string, status: string, exp: string) => raw.prepare("INSERT INTO domain_orders(id,customer_id,hostname,status,registrar_cost_micro,renewal_cost_micro,price_micro,renewal_price_micro,quote_expires_at,charge_currency,charge_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(id, "u1", `${id}.com`, status, 1, 1, 15_000_000, 15_000_000, exp, "USD", 1500);
++    const future = new Date(NOW + 600_000).toISOString();
++    ins("o1", "awaiting_payment", future); ins("o2", "awaiting_payment", new Date(NOW - 1000).toISOString()); ins("o3", "paid", future);
++    expect((await createDomainCheckout(db, paypal, "u1", "o1", ctx)).url).toContain("paypal.test");
++    expect((paypal.calls.find((c) => c.op === "order")!.args as any)).toMatchObject({ amountMinor: 1500, currency: "USD", customId: "o1" });
++    expect(one(raw, "select paypal_order_id from domain_orders where id='o1'").paypal_order_id).toMatch(/^ORD-MOCK/);
++    await expect(createDomainCheckout(db, paypal, "u1", "o2", ctx)).rejects.toMatchObject({ code: "quote_expired" });
++    await expect(createDomainCheckout(db, paypal, "u1", "o3", ctx)).rejects.toMatchObject({ code: "bad_state" });
++    await expect(createDomainCheckout(db, paypal, "u2", "o1", ctx)).rejects.toMatchObject({ code: "not_found" });
++  });
++});
++
++describe("PayPal 웹훅", () => {
++  it("서명 불일치는 400, 아무것도 저장하지 않는다", async () => {
++    const { db, raw } = world();
++    expect((await send(db, sale(), "bad")).status).toBe(400);
++    expect(q(raw, "select * from webhook_events")).toHaveLength(0);
++  });
++  it("정상 흐름: ACTIVATED 연결 → SALE.COMPLETED → 활성화 + 프로비저닝 작업 1건 + 결제/인보이스 기록", async () => {
++    const { db, raw } = world(); seedSubscription(raw);
++    expect((await send(db, ev("BILLING.SUBSCRIPTION.ACTIVATED", { id: "I-1", custom_id: "sub_1" }))).status).toBe(200);
++    expect(one(raw, "select status from subscriptions").status).toBe("incomplete"); // 승인만으로 서비스를 열지 않는다
++    expect((await send(db, sale())).status).toBe(200);
++    expect(one(raw, "select status, current_period_end from subscriptions")).toMatchObject({ status: "active" });
++    expect(q(raw, "select kind from deployment_jobs")).toEqual([{ kind: "provision" }]);
++    expect(one(raw, "select amount_micro, provider, amount_minor from payments")).toMatchObject({ amount_micro: 12_990_000, provider: "paypal", amount_minor: 1299 });
++    expect(q(raw, "select paypal_sale_id from invoices")).toEqual([{ paypal_sale_id: "SALE1" }]);
++  });
++  it("같은 이벤트 재전송은 duplicate, 같은 결제 다른 이벤트도 중복 기록 없음", async () => {
++    const { db, raw } = world(); seedSubscription(raw, { paypalSub: "I-1" });
++    const body = sale();
++    expect((await send(db, body)).body).toBe("ok");
++    expect((await send(db, body)).body).toBe("duplicate");
++    await send(db, sale("SALE1")); // 새 이벤트 ID 지만 같은 sale
++    expect(q(raw, "select * from payments")).toHaveLength(1);
++    expect(q(raw, "select * from deployment_jobs")).toHaveLength(1);
++  });
++  it("PayPal 구독 ID 연결 전에 결제가 먼저 오면 custom 값으로 찾고, 못 찾으면 500(재시도 유도)", async () => {
++    const { db, raw } = world(); seedSubscription(raw);
++    const r = await send(db, ev("PAYMENT.SALE.COMPLETED", { id: "S9", state: "completed", billing_agreement_id: "I-unknown", custom: "sub_1", amount: { total: "12.99", currency: "USD" } }));
++    expect(r.status).toBe(200);
++    expect(one(raw, "select status from subscriptions").status).toBe("active");
++    const r2 = await send(db, ev("PAYMENT.SALE.COMPLETED", { id: "S10", state: "completed", billing_agreement_id: "I-ghost", amount: { total: "1.00", currency: "USD" } }));
++    expect(r2.status).toBe(500);
++    expect(one(raw, "select status from webhook_events where type='PAYMENT.SALE.COMPLETED' order by received_at desc, rowid desc limit 1").status).toBe("failed");
++  });
++  it("USD 가 아니거나 미완료 결제는 반영하지 않는다", async () => {
++    const { db, raw } = world(); seedSubscription(raw, { paypalSub: "I-1" });
++    expect((await send(db, ev("PAYMENT.SALE.COMPLETED", { id: "S1", state: "pending", billing_agreement_id: "I-1", amount: { total: "12.99", currency: "USD" } }))).body).toBe("ignored");
++    expect((await send(db, ev("PAYMENT.SALE.COMPLETED", { id: "S2", state: "completed", billing_agreement_id: "I-1", amount: { total: "12.99", currency: "EUR" } }))).status).toBe(500);
++    expect(q(raw, "select * from payments")).toHaveLength(0);
++  });
++  it("결제 실패 → past_due + 알림, 다음 결제 성공 → active + resume 작업", async () => {
++    const { db, raw } = world(); seedSubscription(raw, { paypalSub: "I-1" });
++    await send(db, sale("S1"));
++    await send(db, ev("BILLING.SUBSCRIPTION.PAYMENT.FAILED", { id: "I-1" }));
++    expect(one(raw, "select status from subscriptions").status).toBe("past_due");
++    expect(q(raw, "select * from notifications")).toHaveLength(1);
++    await send(db, sale("S2"));
++    expect(one(raw, "select status from subscriptions").status).toBe("active");
++    expect(q(raw, "select kind from deployment_jobs order by rowid")).toEqual([{ kind: "provision" }, { kind: "resume" }]);
++  });
++  it("PayPal 에서 취소: 이용 기간이 남았으면 canceling(기간 종료까지 유지), 없으면 canceled + suspend", async () => {
++    const { db, raw } = world(); seedSubscription(raw, { paypalSub: "I-1" });
++    await send(db, sale("S1"));
++    expect((await send(db, ev("BILLING.SUBSCRIPTION.CANCELLED", { id: "I-1" }))).status).toBe(200);
++    expect(one(raw, "select status, cancel_at_period_end c from subscriptions")).toMatchObject({ status: "canceling", c: 1 });
++    expect(q(raw, "select kind from deployment_jobs")).toEqual([{ kind: "provision" }]); // 아직 중지하지 않는다
++    const w2 = world(); seedSubscription(w2.raw, { paypalSub: "I-1" });
++    w2.raw.exec("UPDATE subscriptions SET status='active', current_period_end='2020-01-01T00:00:00Z'");
++    await send(w2.db, ev("BILLING.SUBSCRIPTION.CANCELLED", { id: "I-1" }));
++    expect(one(w2.raw, "select status from subscriptions").status).toBe("canceled");
++    expect(q(w2.raw, "select kind from deployment_jobs")).toEqual([{ kind: "suspend" }]);
++  });
++  it("PayPal 이 구독을 정지하면 suspended + suspend 작업", async () => {
++    const { db, raw } = world(); seedSubscription(raw, { paypalSub: "I-1" });
++    await send(db, sale("S1"));
++    await send(db, ev("BILLING.SUBSCRIPTION.SUSPENDED", { id: "I-1" }));
++    expect(one(raw, "select status from subscriptions").status).toBe("suspended");
++  });
++  it("부분 환불은 payments=partially_refunded, 전액 환불은 refunded + 구독 refunded + suspend", async () => {
++    const { db, raw } = world(); seedSubscription(raw, { paypalSub: "I-1" });
++    await send(db, sale("S1"));
++    await send(db, ev("PAYMENT.SALE.REFUNDED", { id: "R1", sale_id: "S1", amount: { total: "5.00", currency: "USD" } }));
++    expect(one(raw, "select status from payments").status).toBe("partially_refunded");
++    expect(one(raw, "select status from subscriptions").status).toBe("active");
++    await send(db, ev("PAYMENT.SALE.REFUNDED", { id: "R2", sale_id: "S1", amount: { total: "7.99", currency: "USD" } }));
++    expect(one(raw, "select status from payments").status).toBe("refunded");
++    expect(one(raw, "select status from subscriptions").status).toBe("refunded");
++    expect(q(raw, "select kind from deployment_jobs order by rowid")).toEqual([{ kind: "provision" }, { kind: "suspend" }]);
++    await send(db, ev("PAYMENT.SALE.REFUNDED", { id: "R2", sale_id: "S1", amount: { total: "7.99", currency: "USD" } }, "WH-again"));
++    expect(q(raw, "select * from refunds")).toHaveLength(2); // 같은 환불 ID 는 한 번만
++  });
++  it("분쟁/역전 → 결제 disputed + 구독 suspended + 운영자 알림", async () => {
++    const { db, raw } = world(); seedSubscription(raw, { paypalSub: "I-1" });
++    await send(db, sale("S1"));
++    await send(db, ev("CUSTOMER.DISPUTE.CREATED", { dispute_id: "PP-D-1", reason: "MERCHANDISE_OR_SERVICE_NOT_RECEIVED", disputed_transactions: [{ seller_transaction_id: "S1" }] }));
++    expect(one(raw, "select status from payments").status).toBe("disputed");
++    expect(one(raw, "select status from subscriptions").status).toBe("suspended");
++    expect(q(raw, "select kind from refunds")).toEqual([{ kind: "chargeback" }]);
++    expect(q(raw, "select severity from notifications where audience='operator'")).toEqual([{ severity: "critical" }]);
++  });
++  it("알 수 없는 이벤트는 ignored 로 200", async () => {
++    const { db } = world();
++    const r = await send(db, ev("CATALOG.PRODUCT.CREATED", {}));
++    expect(r).toEqual({ status: 200, body: "ignored" });
++  });
++  it("PayPal 서명 검증 API 장애는 500(재시도)이고 이벤트를 처리하지 않는다", async () => {
++    const { db, raw } = world();
++    const pp = new MockPayPal(); pp.failNext = new PayPalError(503, undefined, "down");
++    expect((await send(db, sale(), MockPayPal.VALID_SIG, pp)).status).toBe(500);
++    expect(q(raw, "select * from webhook_events")).toHaveLength(0);
++  });
++});
++
++describe("도메인 일회성 결제", () => {
++  function orderWorld() {
++    const w = world();
++    w.raw.prepare("INSERT INTO domain_orders(id,customer_id,hostname,status,registrar_cost_micro,renewal_cost_micro,price_micro,renewal_price_micro,quote_expires_at,charge_currency,charge_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run("o1", "u1", "a.com", "awaiting_payment", 1, 1, 15_000_000, 15_000_000, new Date(NOW + 600_000).toISOString(), "USD", 1500);
++    return w;
++  }
++  const cap = (id = "CAP1", value = "15.00", custom = "o1") => ev("PAYMENT.CAPTURE.COMPLETED", { id, status: "COMPLETED", custom_id: custom, amount: { value, currency_code: "USD" } });
++  it("캡처 완료 → 주문 paid + 결제 기록 + 등록 작업 1건, 재전송·리턴 처리와 겹쳐도 1건", async () => {
++    const { db, raw } = orderWorld();
++    expect((await send(db, cap())).status).toBe(200);
++    expect(one(raw, "select status, stripe_payment_intent_id ref from domain_orders").status).toBe("paid");
++    expect(q(raw, "select kind from deployment_jobs")).toEqual([{ kind: "register_domain" }]);
++    await applyDomainCapture(db, "o1", "CAP1", "USD", 1500, NOW); // 리턴 URL 경로와 중복
++    expect(q(raw, "select * from payments")).toHaveLength(1);
++    expect(q(raw, "select * from deployment_jobs")).toHaveLength(1);
++  });
++  it("금액이 주문과 다르면 거부(500, 주문은 paid 가 되지 않음)", async () => {
++    const { db, raw } = orderWorld();
++    expect((await send(db, cap("CAP2", "1.00"))).status).toBe(500);
++    expect(one(raw, "select status from domain_orders").status).toBe("awaiting_payment");
++  });
++  it("도메인 주문이 아닌 캡처는 무시", async () => {
++    const { db } = orderWorld();
++    expect((await send(db, cap("CAP3", "15.00", "nope"))).body).toBe("ignored");
++  });
++});
+diff --git a/test/stripe.test.ts b/test/stripe.test.ts
+deleted file mode 100644
+index 6f7324f..0000000
+--- a/test/stripe.test.ts
++++ /dev/null
+@@ -1,30 +0,0 @@
+-import { describe, it, expect } from "vitest";
+-import { verifyStripeSignature, signStripePayload } from "../src/lib/stripe";
+-
+-const SECRET = "whsec_test_secret";
+-const NOW = Date.UTC(2026, 9, 17);
+-const body = JSON.stringify({ id: "evt_1", type: "invoice.paid", created: 1, data: { object: {} } });
+-
+-describe("Stripe 서명 검증", () => {
+-  it("올바른 서명 통과", async () => {
+-    const h = await signStripePayload(body, SECRET, NOW);
+-    const r = await verifyStripeSignature(body, h, SECRET, NOW);
+-    expect(r.ok).toBe(true);
+-  });
+-  it("본문 변조·잘못된 시크릿 거부", async () => {
+-    const h = await signStripePayload(body, SECRET, NOW);
+-    expect((await verifyStripeSignature(body + " ", h, SECRET, NOW)).ok).toBe(false);
+-    expect((await verifyStripeSignature(body, h, "other", NOW)).ok).toBe(false);
+-  });
+-  it("오래된 타임스탬프(재전송 공격) 거부", async () => {
+-    const h = await signStripePayload(body, SECRET, NOW - 400_000);
+-    const r = await verifyStripeSignature(body, h, SECRET, NOW);
+-    expect(r).toEqual({ ok: false, reason: "stale" });
+-  });
+-  it("헤더 없음·형식 오류·여러 v1 중 하나만 맞아도 통과", async () => {
+-    expect(await verifyStripeSignature(body, null, SECRET, NOW)).toEqual({ ok: false, reason: "missing_header" });
+-    expect(await verifyStripeSignature(body, "garbage", SECRET, NOW)).toEqual({ ok: false, reason: "bad_header" });
+-    const good = await signStripePayload(body, SECRET, NOW);
+-    expect((await verifyStripeSignature(body, `${good},v1=deadbeef`, SECRET, NOW)).ok).toBe(true);
+-  });
+-});
+diff --git a/test/webhooks.test.ts b/test/webhooks.test.ts
+deleted file mode 100644
+index 7c7df56..0000000
+--- a/test/webhooks.test.ts
++++ /dev/null
+@@ -1,132 +0,0 @@
+-import { describe, it, expect } from "vitest";
+-import { makeDb, seedSubscription } from "./helpers/d1";
+-import { handleStripeWebhook } from "../src/lib/webhooks";
+-import { signStripePayload } from "../src/lib/stripe";
+-import { dispatchOutbox } from "../src/lib/outbox";
+-
+-const SECRET = "whsec_t";
+-const NOW = Date.UTC(2026, 9, 17);
+-let n = 0;
+-const ev = (type: string, object: Record<string, unknown>, id = `evt_${++n}`) => JSON.stringify({ id, type, created: 1, data: { object } });
+-async function send(db: ReturnType<typeof makeDb>["db"], body: string) {
+-  return handleStripeWebhook(db, body, await signStripePayload(body, SECRET, NOW), SECRET, NOW);
+-}
+-const checkout = (ourSub = "sub_1", stripeSub = "sub_stripe_1") => ev("checkout.session.completed", { mode: "subscription", subscription: stripeSub, customer: "cus_1", payment_status: "paid", metadata: { cloudpress_subscription_id: ourSub } });
+-const paid = (id = "in_1", stripeSub = "sub_stripe_1") => ev("invoice.paid", { id, subscription: stripeSub, amount_paid: 1299, payment_intent: `pi_${id}`, charge: `ch_${id}`, lines: { data: [{ period: { start: 1_700_000_000, end: 1_702_592_000 } }] } });
+-const q = (raw: any, sql: string) => raw.prepare(sql).all() as any[];
+-
+-describe("Stripe 웹훅 처리", () => {
+-  it("서명 불일치는 400이며 DB에 기록하지 않음", async () => {
+-    const { db, raw } = makeDb();
+-    const r = await handleStripeWebhook(db, "{}", "t=1,v1=bad", SECRET, NOW);
+-    expect(r.status).toBe(400);
+-    expect(q(raw, "select * from webhook_events")).toHaveLength(0);
+-  });
+-  it("결제 성공 흐름: 연결 → invoice.paid → 활성 + 프로비저닝 작업 1개", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    expect((await send(db, checkout())).status).toBe(200);
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "incomplete" }); // 리디렉션/체크아웃 완료만으로는 활성화하지 않음
+-    expect((await send(db, paid())).status).toBe(200);
+-    expect(raw.prepare("select status, current_period_end from subscriptions").get()).toMatchObject({ status: "active" });
+-    expect(q(raw, "select kind from deployment_jobs")).toEqual([{ kind: "provision" }]);
+-    expect(raw.prepare("select amount_micro from payments").get()).toMatchObject({ amount_micro: 12_990_000 });
+-  });
+-  it("같은 이벤트 재전송은 중복 처리되지 않음", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout());
+-    const body = paid();
+-    expect((await send(db, body)).body).toBe("ok");
+-    expect((await send(db, body)).body).toBe("duplicate");
+-    expect(q(raw, "select * from payments")).toHaveLength(1);
+-    expect(q(raw, "select * from deployment_jobs")).toHaveLength(1);
+-  });
+-  it("다른 이벤트 ID라도 같은 인보이스면 자원을 중복 생성하지 않음", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout());
+-    await send(db, paid("in_1"));
+-    await send(db, paid("in_2")); // 갱신 인보이스
+-    expect(q(raw, "select * from deployment_jobs")).toHaveLength(1);
+-    expect(q(raw, "select * from payments")).toHaveLength(2);
+-  });
+-  it("순서가 뒤바뀐 invoice.paid(연결 전)는 500 후 재시도로 해소", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    const body = paid();
+-    expect((await send(db, body)).status).toBe(500);
+-    expect(raw.prepare("select status, attempts from webhook_events").get()).toMatchObject({ status: "failed", attempts: 1 });
+-    await send(db, checkout());
+-    expect((await send(db, body)).status).toBe(200);
+-    expect(raw.prepare("select status from webhook_events where type='invoice.paid'").get()).toMatchObject({ status: "processed" });
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "active" });
+-  });
+-  it("다른 구독에 이미 연결된 Stripe 구독 ID 로의 재연결은 거부", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw, { stripeSub: "sub_other" });
+-    expect((await send(db, checkout("sub_1", "sub_stripe_1"))).status).toBe(500);
+-  });
+-  it("결제 실패 → past_due, 다음 결제 성공 → active + resume 작업", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout()); await send(db, paid("in_1"));
+-    await send(db, ev("invoice.payment_failed", { subscription: "sub_stripe_1" }));
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "past_due" });
+-    await send(db, paid("in_2"));
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "active" });
+-    expect(q(raw, "select kind from deployment_jobs order by kind")).toEqual([{ kind: "provision" }, { kind: "resume" }]);
+-  });
+-  it("구독 삭제 → canceled + suspend 작업(자원 즉시 삭제 안 함)", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout()); await send(db, paid());
+-    await send(db, ev("customer.subscription.deleted", { id: "sub_stripe_1" }));
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "canceled" });
+-    expect(q(raw, "select kind from deployment_jobs order by kind").map((r) => r.kind)).toEqual(["provision", "suspend"]);
+-  });
+-  it("기간 말 취소 예약 ↔ 해제", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout()); await send(db, paid());
+-    await send(db, ev("customer.subscription.updated", { id: "sub_stripe_1", status: "active", cancel_at_period_end: true }));
+-    expect(raw.prepare("select status, cancel_at_period_end from subscriptions").get()).toMatchObject({ status: "canceling", cancel_at_period_end: 1 });
+-    await send(db, ev("customer.subscription.updated", { id: "sub_stripe_1", status: "active", cancel_at_period_end: false }));
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "active" });
+-  });
+-  it("부분 환불은 구독 유지, 전액 환불은 refunded + suspend", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout()); await send(db, paid());
+-    await send(db, ev("charge.refunded", { id: "ch_in_1", payment_intent: "pi_in_1", amount_refunded: 500, refunds: { data: [{ id: "re_1", amount: 500 }] } }));
+-    expect(raw.prepare("select status from payments").get()).toMatchObject({ status: "partially_refunded" });
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "active" });
+-    await send(db, ev("charge.refunded", { id: "ch_in_1", payment_intent: "pi_in_1", amount_refunded: 1299, refunds: { data: [{ id: "re_1", amount: 500 }, { id: "re_2", amount: 799 }] } }));
+-    expect(raw.prepare("select status from payments").get()).toMatchObject({ status: "refunded" });
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "refunded" });
+-    expect(q(raw, "select * from refunds")).toHaveLength(2); // re_1 중복 삽입 없음
+-  });
+-  it("분쟁(차지백) → 결제 disputed, 구독 suspended, 운영자 알림", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout()); await send(db, paid());
+-    await send(db, ev("charge.dispute.created", { id: "dp_1", charge: "ch_in_1", amount: 1299, reason: "fraudulent" }));
+-    expect(raw.prepare("select status from payments").get()).toMatchObject({ status: "disputed" });
+-    expect(raw.prepare("select status from subscriptions").get()).toMatchObject({ status: "suspended" });
+-    expect(raw.prepare("select kind from refunds").get()).toMatchObject({ kind: "chargeback" });
+-    expect(q(raw, "select * from notifications where audience='operator'")).toHaveLength(1);
+-  });
+-  it("알 수 없는 이벤트는 ignored 로 기록하고 200", async () => {
+-    const { db, raw } = makeDb();
+-    expect((await send(db, ev("customer.created", {}))).body).toBe("ignored");
+-    expect(raw.prepare("select status from webhook_events").get()).toMatchObject({ status: "ignored" });
+-  });
+-});
+-
+-describe("아웃박스", () => {
+-  it("대기 작업을 큐로 1회만 전달", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout()); await send(db, paid());
+-    const sent: unknown[] = [];
+-    const queue = { send: async (m: unknown) => { sent.push(m); } };
+-    expect(await dispatchOutbox(db, queue, NOW)).toBe(1);
+-    expect(await dispatchOutbox(db, queue, NOW)).toBe(0);
+-    expect(sent).toHaveLength(1);
+-  });
+-  it("큐 전송 실패 시 다음 실행에서 재시도", async () => {
+-    const { db, raw } = makeDb(); seedSubscription(raw);
+-    await send(db, checkout()); await send(db, paid());
+-    expect(await dispatchOutbox(db, { send: async () => { throw new Error("down"); } }, NOW)).toBe(0);
+-    expect(await dispatchOutbox(db, { send: async () => {} }, NOW)).toBe(1);
+-  });
+-});
+diff --git a/test/worker.test.ts b/test/worker.test.ts
+index 9e5d965..af992c3 100644
+--- a/test/worker.test.ts
++++ b/test/worker.test.ts
+@@ -1,7 +1,7 @@
+ import { describe, it, expect } from "vitest";
+ import worker, { type Env } from "../src/worker";
+ import { makeDb } from "./helpers/d1";
+-import { signStripePayload } from "../src/lib/stripe";
++import { MockPayPal } from "../src/lib/paypal.client";
+ 
+ const ORIGIN = "https://app.test";
+ const mkEnv = (over: Partial<Env> = {}): Env => ({ DB: makeDb().db, APP_ORIGIN: ORIGIN, CLOUDPRESS_MODE: "mock", ...over });
+@@ -12,7 +12,7 @@ describe("Worker 라우터", () => {
+   it("health 는 모의 모드와 미연결 상태를 정직하게 보고", async () => {
+     const r = await worker.fetch(new Request("https://api.test/api/health"), mkEnv());
+     const j = await r.json() as any;
+-    expect(j).toMatchObject({ mode: "mock", stripeWebhookConfigured: false, liveIntegrations: [] });
++    expect(j).toMatchObject({ mode: "mock", paypalWebhookConfigured: false, liveIntegrations: [] });
+     expect(r.headers.get("X-Content-Type-Options")).toBe("nosniff");
+   });
+   it("가입 → 로그인 → me → CSRF 없는 로그아웃 거부 → 로그아웃", async () => {
+@@ -41,13 +41,12 @@ describe("Worker 라우터", () => {
+     for (let i = 0; i < 10; i++) last = await worker.fetch(post("/api/auth/login", { email: "x@example.com", password: "wrongwrongwrong" }, h), env);
+     expect(last.status).toBe(429);
+   });
+-  it("웹훅: 시크릿 미설정 503, 서명 불일치 400, 정상 200(Origin 검사 대상 아님)", async () => {
+-    const body = JSON.stringify({ id: "evt_w1", type: "customer.created", created: 1, data: { object: {} } });
+-    const mk = (sig: string) => new Request("https://api.test/api/webhooks/stripe", { method: "POST", headers: { "stripe-signature": sig }, body });
+-    expect((await worker.fetch(mk("x"), mkEnv())).status).toBe(503);
+-    const env = mkEnv({ STRIPE_WEBHOOK_SECRET: "whsec_t" });
+-    expect((await worker.fetch(mk("t=1,v1=bad"), env)).status).toBe(400);
+-    expect((await worker.fetch(mk(await signStripePayload(body, "whsec_t", Date.now())), env)).status).toBe(200);
++  it("웹훅: 서명 불일치 400, 정상 200, 라이브에서 웹훅 ID 미설정은 503(Origin 검사 대상 아님)", async () => {
++    const body = JSON.stringify({ id: "WH-evt_w1", event_type: "CUSTOMER.CREATED", resource: {} });
++    const mk = (sig: string) => new Request("https://api.test/api/webhooks/paypal", { method: "POST", headers: { "paypal-transmission-sig": sig, "paypal-auth-algo": "SHA256withRSA", "paypal-cert-url": "https://api.paypal.com/cert", "paypal-transmission-id": "t1", "paypal-transmission-time": "2026-10-25T00:00:00Z" }, body });
++    expect((await worker.fetch(mk("bad"), mkEnv())).status).toBe(400);
++    expect((await worker.fetch(mk(MockPayPal.VALID_SIG), mkEnv())).status).toBe(200);
++    expect((await worker.fetch(mk(MockPayPal.VALID_SIG), mkEnv({ CLOUDPRESS_MODE: "live" }))).status).toBe(503);
+   });
+   it("알 수 없는 경로 404, 잘못된 JSON 400", async () => {
+     const env = mkEnv();
+diff --git a/test/workerBilling.test.ts b/test/workerBilling.test.ts
+index 97c7beb..09aa530 100644
+--- a/test/workerBilling.test.ts
++++ b/test/workerBilling.test.ts
+@@ -32,7 +32,7 @@ describe("결제·도메인 API 라우트(모의 모드)", () => {
+     const { env: e, raw } = env(); const s = await session(e);
+     const ok = await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "USD" }, s), e);
+     expect(ok.status).toBe(201);
+-    expect(((await ok.json()) as any).url).toContain("checkout.stripe.test");
++    expect(((await ok.json()) as any).url).toContain("paypal.test");
+     expect(raw.prepare("select status s from subscriptions").get()).toMatchObject({ s: "incomplete" });
+     expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "EUR" }, s), e)).status).toBe(400);
+     expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ghost", currency: "USD" }, s), e)).status).toBe(400);
