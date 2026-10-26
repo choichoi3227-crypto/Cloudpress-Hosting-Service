@@ -4,25 +4,26 @@ import { usd, type Micro } from "./money";
 export interface DomainPricingConfig {
   markupBp: number;
   minFeeMicro: Micro;
-  stripeRateBp: number;
-  stripeFixedMicro: Micro;
+  feeRateBp: number;
+  feeFixedMicro: Micro;
   /** 견적 후 등록 시점에 원가가 올라도 감수하는 한도. 초과하면 등록하지 않고 환불. */
   driftToleranceMicro: Micro;
   quoteTtlMinutes: number;
 }
-export const SEED_DOMAIN_PRICING: DomainPricingConfig = { markupBp: 1500, minFeeMicro: usd("2.00"), stripeRateBp: 290, stripeFixedMicro: usd("0.30"), driftToleranceMicro: usd("0.25"), quoteTtlMinutes: 15 };
+// 결제 수수료 가정치(PayPal 해외 상업 거래 기준 추정: 4.4% + $0.30). 계정 계약 수수료와 다를 수 있으니 운영자가 확인 후 조정한다.
+export const SEED_DOMAIN_PRICING: DomainPricingConfig = { markupBp: 1500, minFeeMicro: usd("2.00"), feeRateBp: 440, feeFixedMicro: usd("0.30"), driftToleranceMicro: usd("0.25"), quoteTtlMinutes: 15 };
 
 const ceilCents = (m: Micro) => Math.ceil(m / 10_000) * 10_000;
 
-/** 고객 판매가 = 원가 + 수수료를 Stripe 수수료까지 감안해 올림(센트 단위). 수수료 하한 보장: 결제 수수료를 빼고도 minFee 이상 남는다. */
+/** 고객 판매가 = 원가 + 수수료를 결제(PayPal) 수수료까지 감안해 올림(센트 단위). 수수료 하한 보장: 결제 수수료를 빼고도 minFee 이상 남는다. */
 export function priceFor(costMicro: Micro, c: DomainPricingConfig = SEED_DOMAIN_PRICING): Micro {
   const fee = Math.max(c.minFeeMicro, Math.round((costMicro * c.markupBp) / 10_000));
   const base = costMicro + fee;
-  return ceilCents(Math.ceil(((base + c.stripeFixedMicro) * 10_000) / (10_000 - c.stripeRateBp)));
+  return ceilCents(Math.ceil(((base + c.feeFixedMicro) * 10_000) / (10_000 - c.feeRateBp)));
 }
 
 export function netMarginMicro(priceMicro: Micro, costMicro: Micro, c: DomainPricingConfig = SEED_DOMAIN_PRICING): Micro {
-  return priceMicro - Math.round((priceMicro * c.stripeRateBp) / 10_000) - c.stripeFixedMicro - costMicro;
+  return priceMicro - Math.round((priceMicro * c.feeRateBp) / 10_000) - c.feeFixedMicro - costMicro;
 }
 
 export const driftAcceptable = (quotedCost: Micro, currentCost: Micro, c: DomainPricingConfig = SEED_DOMAIN_PRICING) => currentCost - quotedCost <= c.driftToleranceMicro;

@@ -1,5 +1,5 @@
 import type { Env } from "./worker";
-import { StripeHttp, MockStripe, type StripePort } from "./lib/stripe.client";
+import { PayPalHttp, MockPayPal, type PayPalPort } from "./lib/paypal.client";
 import { CfClient } from "./lib/cfApi";
 import { CloudflareRegistrar, MockRegistrar, type RegistrarPort, type NameserverPort } from "./lib/registrar";
 import { GabiaRegistrar, MockGabiaClient, type PortMap } from "./lib/registrarRouter";
@@ -12,7 +12,9 @@ export class ConfigError extends Error {}
 
 export interface Runtime {
   mode: "mock" | "live";
-  stripe: StripePort;
+  paypal: PayPalPort;
+  /** PayPal 환경(sandbox|live). 고객 자동결제 관리 링크 등에 쓴다. */
+  paypalEnv: "sandbox" | "live";
   ports: PortMap;
   portFor(provider: string): RegistrarPort;
   nsPortFor(provider: string): NameserverPort;
@@ -34,11 +36,11 @@ export function buildRuntime(env: Env): Runtime {
     if (!mock) {
       const cf = new MockRegistrar(); const gc = new MockGabiaClient(); const gabia = new GabiaRegistrar(gc);
       const crypto: Crypto = { encrypt: (p, a) => encryptSecret(p, DEV_ONLY_KEY, a), decrypt: (t, a) => decryptSecret(t, DEV_ONLY_KEY, a) };
-      mock = { mode: "mock", stripe: new MockStripe(), ports: { cloudflare: cf, gabia }, portFor: (p) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones: new MockZones(), crypto, provisioner: { provision: async () => {}, suspend: async () => {}, resume: async () => {} } };
+      mock = { mode: "mock", paypal: new MockPayPal(), paypalEnv: "sandbox", ports: { cloudflare: cf, gabia }, portFor: (p) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones: new MockZones(), crypto, provisioner: { provision: async () => {}, suspend: async () => {}, resume: async () => {} } };
     }
     return mock;
   }
-  const missing = (["STRIPE_SECRET_KEY", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "SECRETS_ENCRYPTION_KEY"] as const).filter((k) => !env[k]);
+  const missing = (["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET", "PAYPAL_WEBHOOK_ID", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "SECRETS_ENCRYPTION_KEY"] as const).filter((k) => !env[k]);
   if (missing.length) throw new ConfigError(`live 모드에 필요한 비밀 값이 없음: ${missing.join(", ")}`);
   const cf = new CfClient({ token: env.CLOUDFLARE_API_TOKEN!, accountId: env.CLOUDFLARE_ACCOUNT_ID! });
   const registrar = new CloudflareRegistrar(cf);
@@ -46,7 +48,8 @@ export function buildRuntime(env: Env): Runtime {
   const key = env.SECRETS_ENCRYPTION_KEY!;
   return {
     mode: "live",
-    stripe: new StripeHttp({ secretKey: env.STRIPE_SECRET_KEY!, apiVersion: env.STRIPE_API_VERSION }),
+    paypal: new PayPalHttp({ clientId: env.PAYPAL_CLIENT_ID!, clientSecret: env.PAYPAL_CLIENT_SECRET!, env: env.PAYPAL_ENV === "sandbox" ? "sandbox" : "live" }),
+    paypalEnv: env.PAYPAL_ENV === "sandbox" ? "sandbox" : "live",
     ports: { cloudflare: registrar }, // 가비아는 설정 후에만 라우팅 대상에 포함
     portFor: (p) => (p === "gabia" ? gabia : registrar),
     nsPortFor: (p) => (p === "gabia" ? gabia : { setNameservers: async () => {} }),

@@ -32,7 +32,7 @@ describe("결제·도메인 API 라우트(모의 모드)", () => {
     const { env: e, raw } = env(); const s = await session(e);
     const ok = await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "USD" }, s), e);
     expect(ok.status).toBe(201);
-    expect(((await ok.json()) as any).url).toContain("checkout.stripe.test");
+    expect(((await ok.json()) as any).url).toContain("paypal.test");
     expect(raw.prepare("select status s from subscriptions").get()).toMatchObject({ s: "incomplete" });
     expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "EUR" }, s), e)).status).toBe(400);
     expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ghost", currency: "USD" }, s), e)).status).toBe(400);

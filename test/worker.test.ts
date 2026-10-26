@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import worker, { type Env } from "../src/worker";
 import { makeDb } from "./helpers/d1";
-import { signStripePayload } from "../src/lib/stripe";
+import { MockPayPal } from "../src/lib/paypal.client";
 
 const ORIGIN = "https://app.test";
 const mkEnv = (over: Partial<Env> = {}): Env => ({ DB: makeDb().db, APP_ORIGIN: ORIGIN, CLOUDPRESS_MODE: "mock", ...over });
@@ -12,7 +12,7 @@ describe("Worker 라우터", () => {
   it("health 는 모의 모드와 미연결 상태를 정직하게 보고", async () => {
     const r = await worker.fetch(new Request("https://api.test/api/health"), mkEnv());
     const j = await r.json() as any;
-    expect(j).toMatchObject({ mode: "mock", stripeWebhookConfigured: false, liveIntegrations: [] });
+    expect(j).toMatchObject({ mode: "mock", paypalWebhookConfigured: false, liveIntegrations: [] });
     expect(r.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
   it("가입 → 로그인 → me → CSRF 없는 로그아웃 거부 → 로그아웃", async () => {
@@ -41,13 +41,12 @@ describe("Worker 라우터", () => {
     for (let i = 0; i < 10; i++) last = await worker.fetch(post("/api/auth/login", { email: "x@example.com", password: "wrongwrongwrong" }, h), env);
     expect(last.status).toBe(429);
   });
-  it("웹훅: 시크릿 미설정 503, 서명 불일치 400, 정상 200(Origin 검사 대상 아님)", async () => {
-    const body = JSON.stringify({ id: "evt_w1", type: "customer.created", created: 1, data: { object: {} } });
-    const mk = (sig: string) => new Request("https://api.test/api/webhooks/stripe", { method: "POST", headers: { "stripe-signature": sig }, body });
-    expect((await worker.fetch(mk("x"), mkEnv())).status).toBe(503);
-    const env = mkEnv({ STRIPE_WEBHOOK_SECRET: "whsec_t" });
-    expect((await worker.fetch(mk("t=1,v1=bad"), env)).status).toBe(400);
-    expect((await worker.fetch(mk(await signStripePayload(body, "whsec_t", Date.now())), env)).status).toBe(200);
+  it("웹훅: 서명 불일치 400, 정상 200, 라이브에서 웹훅 ID 미설정은 503(Origin 검사 대상 아님)", async () => {
+    const body = JSON.stringify({ id: "WH-evt_w1", event_type: "CUSTOMER.CREATED", resource: {} });
+    const mk = (sig: string) => new Request("https://api.test/api/webhooks/paypal", { method: "POST", headers: { "paypal-transmission-sig": sig, "paypal-auth-algo": "SHA256withRSA", "paypal-cert-url": "https://api.paypal.com/cert", "paypal-transmission-id": "t1", "paypal-transmission-time": "2026-10-25T00:00:00Z" }, body });
+    expect((await worker.fetch(mk("bad"), mkEnv())).status).toBe(400);
+    expect((await worker.fetch(mk(MockPayPal.VALID_SIG), mkEnv())).status).toBe(200);
+    expect((await worker.fetch(mk(MockPayPal.VALID_SIG), mkEnv({ CLOUDPRESS_MODE: "live" }))).status).toBe(503);
   });
   it("알 수 없는 경로 404, 잘못된 JSON 400", async () => {
     const env = mkEnv();

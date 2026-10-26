@@ -74,7 +74,7 @@ const { id } = Astro.params;
             <h2 class="text-lg font-semibold">작업</h2>
           </div>
           <div class="p-6 space-y-4">
-            <a href="/billing/portal" target="_blank" class="w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">결제 수단 관리 (Stripe 포털)</a>
+            <button type="button" data-paypal-manage  class="w-full bg-primary hover:bg-blue-700 text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">결제 수단 관리 (PayPal 포털)</button>
             <a href="/services" class="w-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white py-3 rounded-lg font-medium text-center inline-block transition-colors">서비스 목록으로 돌아가기</a>
           </div>
         </div>

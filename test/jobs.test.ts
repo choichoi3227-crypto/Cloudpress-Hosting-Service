@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { makeDb } from "./helpers/d1";
-import { MockStripe, StripeError } from "../src/lib/stripe.client";
+import { MockPayPal, PayPalError } from "../src/lib/paypal.client";
 import { MockRegistrar } from "../src/lib/registrar";
 import { MockGabiaClient, GabiaRegistrar } from "../src/lib/registrarRouter";
 import { MockZones } from "../src/lib/zones";
@@ -20,11 +20,11 @@ const contact = { email: "o@x.co", phone: "+82.1012345678", postal_info: { name:
 function world() {
   const { db, raw } = makeDb();
   raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h')");
-  const cf = new MockRegistrar(), gc = new MockGabiaClient(), gabia = new GabiaRegistrar(gc), stripe = new MockStripe(), zones = new MockZones();
-  const base = { db, stripe, portFor: (p: string) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones, crypto: crypt, provisioner: null } as const;
+  const cf = new MockRegistrar(), gc = new MockGabiaClient(), gabia = new GabiaRegistrar(gc), paypal = new MockPayPal(), zones = new MockZones();
+  const base = { db, paypal, portFor: (p: string) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones, crypto: crypt, provisioner: null } as const;
   const ctx = (nowMs = NOW, over: Partial<JobContext> = {}): JobContext => ({ ...base, nowMs, ...over });
   const addJob = (id: string, kind: string, payload = "{}", extra = "") => raw.exec(`INSERT INTO deployment_jobs(id,kind,idempotency_key,payload_json,state${extra ? "," + extra.split("=")[0] : ""}) VALUES('${id}','${kind}','k_${id}','${payload}','queued'${extra ? "," + extra.split("=")[1] : ""})`);
-  return { db, raw, cf, gc, gabia, stripe, zones, ctx, addJob };
+  return { db, raw, cf, gc, gabia, paypal, zones, ctx, addJob };
 }
 const job = (raw: any, id: string) => raw.prepare("select state, attempts, last_error e, next_run_at n from deployment_jobs where id=?").get(id) as any;
 
@@ -72,8 +72,8 @@ describe("작업 처리기", () => {
     const w = world();
     const mk = (e: Error): Record<string, Handler> => ({ x: async () => { throw e; } });
     w.addJob("a", "x"); w.addJob("b", "x");
-    expect(await processJob(w.ctx(), "a", mk(new StripeError(503, undefined, "down")))).toBe("retrying");
-    expect(await processJob(w.ctx(), "b", mk(new StripeError(402, "card_declined", "no")))).toBe("dead");
+    expect(await processJob(w.ctx(), "a", mk(new PayPalError(503, undefined, "down")))).toBe("retrying");
+    expect(await processJob(w.ctx(), "b", mk(new PayPalError(402, "card_declined", "no")))).toBe("dead");
   });
   it("백오프는 지수 증가·최대 1시간·±20% 분산", () => {
     expect([1, 2, 3, 4].map((a) => backoffSeconds(a, 0.5))).toEqual([30, 60, 120, 240]);
@@ -149,25 +149,25 @@ describe("도메인 작업 종단 간", () => {
     expect(w.raw.prepare("select count(*) c from notifications where audience='operator'").get()).toMatchObject({ c: 1 });
     expect(w.raw.prepare("select count(*) c from deployment_jobs where kind='refund_domain_order'").get()).toMatchObject({ c: 0 });
   });
-  it("환불 작업: 결제 직후 불가 판정 → refund_due → Stripe 환불(멱등 키) → refunded, 재실행해도 1회", async () => {
+  it("환불 작업: 결제 직후 불가 판정 → refund_due → PayPal 환불(멱등 키) → refunded, 재실행해도 1회", async () => {
     const w = world(); const q = await paidOrder(w, "gone.com"); w.cf.cfg.unavailable = ["gone.com"];
     expect(await processJob(w.ctx(), "reg")).toBe("succeeded");
     expect(w.raw.prepare("select status s from domain_orders").get()).toMatchObject({ s: "refund_due" });
     const refundJob = w.raw.prepare("select id from deployment_jobs where kind='refund_domain_order'").get() as { id: string };
     expect(await processJob(w.ctx(), refundJob.id)).toBe("succeeded");
     expect(w.raw.prepare("select status s from domain_orders").get()).toMatchObject({ s: "refunded" });
-    const refunds = w.stripe.calls.filter((c) => c.op === "refund");
+    const refunds = w.paypal.calls.filter((c) => c.op === "refund");
     expect(refunds).toHaveLength(1); expect(refunds[0]!.idem).toBe(`refund:${q.orderId}`);
     w.raw.exec(`UPDATE deployment_jobs SET state='queued', attempts=0 WHERE id='${refundJob.id}'`);
     expect(await processJob(w.ctx(), refundJob.id)).toBe("succeeded"); // 이미 환불됨 → 추가 호출 없음
-    expect(w.stripe.calls.filter((c) => c.op === "refund")).toHaveLength(1);
+    expect(w.paypal.calls.filter((c) => c.op === "refund")).toHaveLength(1);
   });
   it("환불 작업은 등록 완료 주문을 환불하지 않음(폐기 + 알림)", async () => {
     const w = world(); const q = await paidOrder(w, "done.com");
     await processJob(w.ctx(), "reg");
     w.raw.exec(`INSERT INTO deployment_jobs(id,kind,idempotency_key,payload_json,state) VALUES('rf','refund_domain_order','refund:${q.orderId}','{"orderId":"${q.orderId}"}','queued')`);
     expect(await processJob(w.ctx(), "rf")).toBe("dead");
-    expect(w.stripe.calls.some((c) => c.op === "refund")).toBe(false);
+    expect(w.paypal.calls.some((c) => c.op === "refund")).toBe(false);
   });
 });
 

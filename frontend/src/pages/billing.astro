@@ -6,7 +6,7 @@ import Layout from '../layouts/Layout.astro';
   <div class="space-y-8">
     <div class="flex items-center justify-between">
       <h1 class="text-3xl font-bold text-gray-900 dark:text-white">청구 및 결제</h1>
-      <a href="/billing/portal" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" target="_blank">Stripe 고객 포털</a>
+      <button type="button" data-paypal-manage class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors" >PayPal 고객 포털</button>
     </div>
 
     <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-hidden">
@@ -14,8 +14,8 @@ import Layout from '../layouts/Layout.astro';
         <h2 class="text-lg font-semibold">결제 수단 관리</h2>
       </div>
       <div class="p-6">
-        <p class="text-gray-600 dark:text-gray-400 mb-4">Stripe 고객 포털에서 결제 수단을 관리하세요.</p>
-        <a href="/billing/portal" class="bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block" target="_blank">고객 포털 열기</a>
+        <p class="text-gray-600 dark:text-gray-400 mb-4">PayPal 고객 포털에서 결제 수단을 관리하세요.</p>
+        <button type="button" data-paypal-manage class="bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-block" >고객 포털 열기</button>
       </div>
     </div>
 

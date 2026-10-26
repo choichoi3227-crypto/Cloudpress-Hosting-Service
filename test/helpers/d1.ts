@@ -4,7 +4,7 @@ import type { DatabaseSync as DB } from "node:sqlite";
 import type { D1Like, D1Stmt } from "../../src/lib/db";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (p: string) => DB };
-export const MIGRATIONS = ["0001_init.sql", "0002_engines_rail_optimizer.sql", "0003_storage_recycling.sql", "0004_domains_zones.sql", "0005_fx_providers.sql", "0006_stripe_currency_jobs.sql"];
+export const MIGRATIONS = ["0001_init.sql", "0002_engines_rail_optimizer.sql", "0003_storage_recycling.sql", "0004_domains_zones.sql", "0005_fx_providers.sql", "0006_stripe_currency_jobs.sql", "0010_paypal.sql"];
 export const readMigration = (f: string) => readFileSync(new URL(`../../migrations/${f}`, import.meta.url), "utf8");
 
 class Stmt implements D1Stmt {
@@ -31,12 +31,12 @@ export function makeDb(): { db: D1Like; raw: DB } {
   return { db, raw };
 }
 
-/** 구독 시나리오 시드: 사용자, 상품, 가격 버전, incomplete 구독(Stripe ID 미연결). */
-export function seedSubscription(raw: DB, opts: { subId?: string; stripeSub?: string | null } = {}) {
+/** 구독 시나리오 시드: 사용자, 상품, 가격 버전, incomplete 구독(PayPal 구독 ID 미연결). */
+export function seedSubscription(raw: DB, opts: { subId?: string; paypalSub?: string | null } = {}) {
   const subId = opts.subId ?? "sub_1";
   raw.exec("INSERT OR IGNORE INTO users(id,email,password_hash) VALUES('u1','u1@example.com','x')");
   raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
   raw.exec("INSERT OR IGNORE INTO prices(id,product_id,version,monthly_micro) VALUES('price_v1','ccs-basic',1,12990000)");
-  raw.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,stripe_subscription_id) VALUES(?,?,?,?,?)").run(subId, "u1", "ccs-basic", "price_v1", opts.stripeSub ?? null);
+  raw.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,paypal_subscription_id) VALUES(?,?,?,?,?)").run(subId, "u1", "ccs-basic", "price_v1", opts.paypalSub ?? null);
   return subId;
 }

@@ -1,6 +1,6 @@
 import { type D1Like, type QueueLike } from "./lib/db";
 import { registerUser, login, getSession, logout, verifyCsrf, originAllowed, sessionCookie, clearSessionCookie, parseCookie, SESSION_COOKIE } from "./lib/auth";
-import { handleStripeWebhook } from "./lib/webhooks";
+import { handlePayPalWebhook, paypalWebhookHeaders } from "./lib/webhooks";
 import { MemoryRateLimiter, type RateLimiter } from "./lib/ratelimit";
 import { dispatchOutbox } from "./lib/outbox";
 import { buildRuntime, ConfigError } from "./runtime";
@@ -20,10 +20,11 @@ export interface Env {
   JOBS?: QueueLike<{ jobId: string }>;
   APP_ORIGIN: string;
   CLOUDPRESS_MODE: "mock" | "live";
-  STRIPE_WEBHOOK_SECRET?: string;
+  PAYPAL_CLIENT_ID?: string;
+  PAYPAL_CLIENT_SECRET?: string;
+  PAYPAL_WEBHOOK_ID?: string;
+  PAYPAL_ENV?: "sandbox" | "live";
   SECRETS_ENCRYPTION_KEY?: string;
-  STRIPE_SECRET_KEY?: string;
-  STRIPE_API_VERSION?: string;
   CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   ASSETS: any;
@@ -79,7 +80,7 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
       return json({
         ok: true,
         mode: env.CLOUDPRESS_MODE,
-        stripeWebhookConfigured: Boolean(env.STRIPE_WEBHOOK_SECRET),
+        paypalWebhookConfigured: Boolean(env.PAYPAL_WEBHOOK_ID),
         encryptionKeyConfigured: Boolean(env.SECRETS_ENCRYPTION_KEY),
         liveIntegrations: [],
         schemaMissingTable: await schemaReady(env.DB)
@@ -91,11 +92,13 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
       if (missing) return json({ error: "schema_not_ready", message: `데이터베이스 마이그레이션이 적용되지 않았습니다(없는 테이블: ${missing}). 운영자가 'wrangler d1 migrations apply'를 실행해야 합니다.` }, 503);
     }
 
-    if (url.pathname === "/api/webhooks/stripe" && req.method === "POST") {
-      if (!env.STRIPE_WEBHOOK_SECRET) return json({ error: "webhook_not_configured" }, 503);
+    if (url.pathname === "/api/webhooks/paypal" && req.method === "POST") {
+      const webhookId = env.PAYPAL_WEBHOOK_ID ?? (env.CLOUDPRESS_MODE === "live" ? undefined : "WH-MOCK");
+      if (!webhookId) return json({ error: "webhook_not_configured" }, 503);
       const raw = await req.text();
       if (raw.length > 1_000_000) return json({ error: "too_large" }, 413);
-      const r = await handleStripeWebhook(env.DB, raw, req.headers.get("stripe-signature"), env.STRIPE_WEBHOOK_SECRET, now);
+      const rt = buildRuntime(env);
+      const r = await handlePayPalWebhook(env.DB, rt.paypal, raw, paypalWebhookHeaders(req.headers), webhookId, now);
       if (r.status === 200 && env.JOBS) await dispatchOutbox(env.DB, env.JOBS, now).catch(() => 0);
       return new Response(r.body, { status: r.status, headers: SECURITY_HEADERS });
     }
@@ -215,7 +218,7 @@ export default {
     await consumeBatch({
       db: env.DB,
       nowMs: Date.now(),
-      stripe: rt.stripe,
+      paypal: rt.paypal,
       portFor: rt.portFor,
       nsPortFor: rt.nsPortFor,
       zones: rt.zones,

@@ -4,6 +4,7 @@ import { verifyPassword } from "./lib/crypto";
 import type { Env } from "./worker";
 import { buildRuntime } from "./runtime";
 import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
+import { applyDomainCapture } from "./lib/webhooks";
 import { parseCurrency, latestFxRate } from "./lib/currency";
 import { recordFxSample } from "./lib/fxStore";
 import { ServiceError, connectDomain } from "./lib/zoneService";
@@ -64,7 +65,7 @@ const subOut = (r: any) => ({
 });
 
 add("GET", "/api/subscriptions", async (c) => {
-  // 결제 전(incomplete) 구독은 목록에서 숨긴다. 결제 완료는 Stripe 웹훅으로만 확정된다.
+  // 결제 전(incomplete) 구독은 목록에서 숨긴다. 결제 완료는 PayPal 웹훅으로만 확정된다.
   const rows = await all(c.env.DB, `${subSelect} WHERE s.customer_id = ? AND s.status NOT IN ('incomplete') ORDER BY s.created_at DESC`, c.session.user.id);
   return c.json(rows.map(subOut));
 });
@@ -75,7 +76,7 @@ add("POST", "/api/subscriptions", async (c) => {
   let cur;
   try { cur = parseCurrency(b.currency ?? "USD"); } catch { return c.json({ error: "bad_currency" }, 400); }
   const rt = buildRuntime(c.env);
-  const r = await createSubscriptionCheckout(c.env.DB, rt.stripe, c.session.user.id, b.productId, cur, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now, fxRateMicro: await fxOf(c.env.DB) });
+  const r = await createSubscriptionCheckout(c.env.DB, rt.paypal, c.session.user.id, b.productId, cur, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now });
   return c.json({ ok: true, subscriptionId: r.subscriptionId, url: r.url }, 201);
 });
 
@@ -84,28 +85,60 @@ add("GET", "/api/subscriptions/:id", async (c, m) => {
   return r ? c.json(subOut(r)) : c.json({ error: "not_found" }, 404);
 });
 
-// 취소는 현재 결제 기간 종료 시점부터 적용한다(추가 CPU 취소 정책과 동일). 즉시 환불은 하지 않는다.
+// 취소: PayPal 구독을 해지해 다음 결제를 막고, 이미 결제한 이용 기간은 끝까지 유지한다(canceling → 기간 종료 시 canceled).
+// 즉시 환불은 하지 않는다.
 add("POST", "/api/services/:id/cancel", async (c, m) => {
-  const s = await one<{ id: string; status: string }>(c.env.DB, "SELECT id, status FROM subscriptions WHERE id = ? AND customer_id = ?", m[1], c.session.user.id);
+  const s = await one<{ id: string; status: string; pp: string | null }>(c.env.DB, "SELECT id, status, paypal_subscription_id AS pp FROM subscriptions WHERE id = ? AND customer_id = ?", m[1], c.session.user.id);
   if (!s) return c.json({ error: "not_found" }, 404);
   if (!["active", "past_due", "suspended"].includes(s.status)) return c.json({ error: "bad_state", message: "취소할 수 없는 상태입니다." }, 409);
+  if (s.pp) {
+    try { await buildRuntime(c.env).paypal.cancelSubscription(s.pp, "고객 요청에 의한 취소"); }
+    catch (e: any) { return c.json({ error: "paypal_error", message: "PayPal 구독 해지에 실패했습니다. 잠시 후 다시 시도하세요." }, e?.retryable ? 503 : 502); }
+  }
   await c.env.DB.prepare("UPDATE subscriptions SET cancel_at_period_end = 1, status = 'canceling', updated_at = ? WHERE id = ?").bind(nowIso(c.now), s.id).run();
   await audit(c.env.DB, { actorId: c.session.user.id, action: "subscription.cancel", targetType: "subscription", targetId: s.id }, c.now);
   return c.json({ ok: true, cancelAtPeriodEnd: true });
 });
 
+// 정지/재개는 PayPal 구독의 청구도 함께 멈추거나 재개한다(정지 중 과금 방지).
 for (const [action, from, to] of [["suspend", "active", "suspended"], ["resume", "suspended", "active"]] as const) {
   add("POST", `/api/services/:id/${action}`, async (c, m) => {
-    const r = await c.env.DB.prepare("UPDATE subscriptions SET status = ?, updated_at = ? WHERE id = ? AND customer_id = ? AND status = ?").bind(to, nowIso(c.now), m[1], c.session.user.id, from).run();
-    if (r.meta.changes === 0) return c.json({ error: "bad_state", message: "현재 상태에서는 실행할 수 없습니다." }, 409);
-    await audit(c.env.DB, { actorId: c.session.user.id, action: `subscription.${action}`, targetType: "subscription", targetId: m[1] }, c.now);
+    const s = await one<{ id: string; pp: string | null }>(c.env.DB, "SELECT id, paypal_subscription_id AS pp FROM subscriptions WHERE id = ? AND customer_id = ? AND status = ?", m[1], c.session.user.id, from);
+    if (!s) return c.json({ error: "bad_state", message: "현재 상태에서는 실행할 수 없습니다." }, 409);
+    if (s.pp) {
+      try { const pp = buildRuntime(c.env).paypal; await (action === "suspend" ? pp.suspendSubscription(s.pp, "고객 요청 정지") : pp.activateSubscription(s.pp, "고객 요청 재개")); }
+      catch (e: any) { return c.json({ error: "paypal_error", message: "PayPal 처리에 실패했습니다. 잠시 후 다시 시도하세요." }, e?.retryable ? 503 : 502); }
+    }
+    await c.env.DB.prepare("UPDATE subscriptions SET status = ?, updated_at = ? WHERE id = ? AND status = ?").bind(to, nowIso(c.now), s.id, from).run();
+    await audit(c.env.DB, { actorId: c.session.user.id, action: `subscription.${action}`, targetType: "subscription", targetId: s.id }, c.now);
     return c.json({ ok: true });
   });
 }
 
+// PayPal 승인 후 구매자가 돌아오는 주소. 도메인(일회성) 주문은 여기서 서버가 캡처하고, 결제 확정은 금액·주문을 서버에서 다시 검증한다.
+// (구독은 웹훅으로만 확정한다. 이 주소의 쿼리값만으로 결제 완료를 믿지 않는다.)
+add("GET", "/api/paypal/return", async (c) => {
+  const kind = c.url.searchParams.get("kind");
+  const orderId = c.url.searchParams.get("order");
+  const token = c.url.searchParams.get("token"); // PayPal 주문 ID
+  const redirect = (to: string) => new Response(null, { status: 302, headers: { Location: `${c.env.APP_ORIGIN}${to}` } });
+  if (kind !== "domain" || !orderId || !token) return redirect("/dashboard");
+  const o = await one<{ id: string; paypal_order_id: string | null; status: string }>(c.env.DB, "SELECT id, paypal_order_id, status FROM domain_orders WHERE id = ? AND customer_id = ?", orderId, c.session.user.id);
+  if (!o || o.paypal_order_id !== token) return redirect("/domains?checkout=invalid");
+  if (o.status !== "awaiting_payment") return redirect("/domains?checkout=done");
+  try {
+    const cap = await buildRuntime(c.env).paypal.captureOrder(token, `capture:${o.id}`);
+    if (cap.status !== "COMPLETED") return redirect("/domains?checkout=pending");
+    await applyDomainCapture(c.env.DB, o.id, cap.captureId, cap.currency, cap.amountMinor, c.now);
+    return redirect("/domains?checkout=success");
+  } catch {
+    return redirect("/domains?checkout=error"); // 캡처가 실제로 됐다면 PAYMENT.CAPTURE.COMPLETED 웹훅이 같은 처리를 멱등하게 수행한다.
+  }
+});
+
 add("POST", "/api/billing/portal", async (c) => {
   const rt = buildRuntime(c.env);
-  return c.json(await createPortal(c.env.DB, rt.stripe, c.session.user.id, c.env.APP_ORIGIN));
+  return c.json(await createPortal(c.env.DB, rt.paypal, c.session.user.id, c.env.APP_ORIGIN, rt.paypalEnv));
 });
 
 /* ───────────── 청구 ───────────── */
@@ -199,7 +232,7 @@ add("POST", "/api/domains/quote", async (c) => {
 
 add("POST", "/api/domains/orders/:id/checkout", async (c, m) => {
   const rt = buildRuntime(c.env);
-  return c.json(await createDomainCheckout(c.env.DB, rt.stripe, c.session.user.id, m[1]!, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now, fxRateMicro: await fxOf(c.env.DB) }));
+  return c.json(await createDomainCheckout(c.env.DB, rt.paypal, c.session.user.id, m[1]!, { appOrigin: c.env.APP_ORIGIN, nowMs: c.now }));
 });
 
 /* ───────────── 컨테이너 · 데이터베이스 (고객 소유 자원) ───────────── */

@@ -23,11 +23,9 @@ import Layout from "../../layouts/Layout.astro";
 
       <div class="grid gap-6 md:grid-cols-2">
         <div>
-          <label for="currency" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">결제 통화</label>
-          <select name="currency" id="currency" class="w-full px-4 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-gray-900 dark:text-white">
-            <option value="USD">USD (미국 달러)</option>
-            <option value="KRW">KRW (원화, 환율 적용)</option>
-          </select>
+          <p class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">결제 수단 / 통화</p>
+          <p class="px-4 py-2 text-gray-700 dark:text-gray-300">PayPal · USD</p>
+          <input type="hidden" id="currency" value="USD" />
         </div>
         <div>
           <p class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">구독 주기</p>
@@ -45,7 +43,7 @@ import Layout from "../../layouts/Layout.astro";
 
       <div class="flex gap-3 pt-4 border-t border-gray-200 dark:border-slate-800">
         <button type="submit" id="create-btn" class="bg-primary hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors flex-1">
-          결제하고 서비스 생성
+          PayPal로 결제하고 서비스 생성
         </button>
         <a href="/services" class="bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-300 px-6 py-3 rounded-lg font-medium transition-colors flex-1 text-center">
           취소
@@ -95,13 +93,13 @@ import Layout from "../../layouts/Layout.astro";
       const err = document.getElementById("create-error")!;
       const btn = document.getElementById("create-btn") as HTMLButtonElement;
       err.classList.add("hidden");
-      btn.disabled = true; btn.textContent = "결제 페이지로 이동 중...";
+      btn.disabled = true; btn.textContent = "PayPal로 이동 중...";
       try {
         const res = await fetch("/api/subscriptions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ productId: prodSel.value, currency: (document.getElementById("currency") as HTMLSelectElement).value })
+          body: JSON.stringify({ productId: prodSel.value, currency: "USD" })
         });
         const data = await res.json();
         if (res.ok && data.url) { window.location.href = data.url; return; }
@@ -111,7 +109,7 @@ import Layout from "../../layouts/Layout.astro";
         err.textContent = "네트워크 오류가 발생했습니다.";
         err.classList.remove("hidden");
       }
-      btn.disabled = false; btn.textContent = "결제하고 서비스 생성";
+      btn.disabled = false; btn.textContent = "PayPal로 결제하고 서비스 생성";
     });
 
     loadPlans();

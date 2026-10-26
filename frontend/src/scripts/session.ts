@@ -60,3 +60,15 @@ export async function initSession(): Promise<void> {
 }
 
 initSession();
+
+// PayPal 에는 자체 고객 포털이 없어 PayPal 계정의 자동결제 관리 페이지로 보낸다.
+document.addEventListener('click', async (e) => {
+  const btn = (e.target as HTMLElement | null)?.closest('[data-paypal-manage]');
+  if (!btn) return;
+  e.preventDefault();
+  try {
+    const res = await fetch('/api/billing/portal', { method: 'POST', credentials: 'include' });
+    const data = await res.json() as { url?: string };
+    if (data.url) window.open(data.url, '_blank', 'noopener');
+  } catch { alert('PayPal 페이지를 열지 못했습니다. 잠시 후 다시 시도하세요.'); }
+});

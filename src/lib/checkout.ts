@@ -1,88 +1,92 @@
 import { type D1Like, newId, nowIso } from "./db";
-import type { StripePort } from "./stripe.client";
+import type { PayPalPort } from "./paypal.client";
 import type { Cur } from "./currency";
-import { usdMicroToWon } from "./fx";
 import { ServiceError } from "./zoneService";
 import { audit } from "./auth";
 
-const ceilTo = (v: number, unit: number) => Math.ceil(v / unit) * unit;
-export const KRW_LIST_ROUNDING = 100;
-
-/** Stripe 고객은 사용자당 1명. 멱등 키로 동시 요청에서도 중복 생성을 막는다. */
-export async function ensureStripeCustomer(db: D1Like, stripe: StripePort, userId: string): Promise<string> {
-  const u = await db.prepare("SELECT email, stripe_customer_id AS c FROM users WHERE id = ?").bind(userId).first<{ email: string; c: string | null }>();
-  if (!u) throw new ServiceError("not_found", "사용자 없음");
-  if (u.c) return u.c;
-  const c = await stripe.createCustomer({ email: u.email, metadata: { cloudpress_user_id: userId } }, `customer:${userId}`);
-  await db.prepare("UPDATE users SET stripe_customer_id = COALESCE(stripe_customer_id, ?) WHERE id = ?").bind(c.id, userId).run();
-  return (await db.prepare("SELECT stripe_customer_id AS c FROM users WHERE id = ?").bind(userId).first<{ c: string }>())!.c;
+/**
+ * PayPal 은 KRW 를 지원하지 않는다(공식 지원 통화 목록에 없음). 따라서 결제는 USD 만 허용한다.
+ * 한국에 등록된 PayPal 계정은 한국 밖 구매자의 결제만 받을 수 있다는 점도 운영자가 알아야 한다(docs/PAYPAL.md).
+ */
+export function assertPayPalCurrency(currency: Cur): void {
+  if (currency !== "USD") throw new ServiceError("currency_unsupported", "PayPal 결제는 USD 만 지원합니다.");
 }
 
-/**
- * 가격 버전 × 통화의 Stripe Price 를 보장한다. 한 번 만든 금액은 바꾸지 않는다(가격 버전 보존).
- * KRW 는 최초 생성 시점의 환율로 목록가(100원 올림)를 확정해 잠근다. 환율이 바뀌어도 기존 구독 가격은 유지되고, 새 가격은 새 가격 버전으로 낸다.
- */
-export async function ensureStripePrice(db: D1Like, stripe: StripePort, priceId: string, currency: Cur, fxRateMicro: number | null, nowMs: number): Promise<{ stripePriceId: string; amountMinor: number }> {
-  const existing = await db.prepare("SELECT amount_minor AS a, stripe_price_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string | null }>();
-  if (existing?.s) return { stripePriceId: existing.s, amountMinor: existing.a };
+/** 가격 버전 × USD → PayPal 월 구독 플랜. 한 번 만들면 재사용한다(가격 버전이 바뀌면 새 플랜 = 기존 구독 가격 유지). */
+export async function ensurePayPalPlan(db: D1Like, paypal: PayPalPort, priceId: string, currency: Cur, nowMs: number): Promise<{ paypalPlanId: string; amountMinor: number }> {
+  assertPayPalCurrency(currency);
+  const existing = await db.prepare("SELECT amount_minor AS a, paypal_plan_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string | null }>();
+  if (existing?.s) return { paypalPlanId: existing.s, amountMinor: existing.a };
   const p = await db.prepare("SELECT p.monthly_micro AS m, p.product_id AS pid, pr.name_ko AS name FROM prices p JOIN products pr ON pr.id = p.product_id WHERE p.id = ?").bind(priceId).first<{ m: number; pid: string; name: string }>();
   if (!p) throw new ServiceError("not_found", "가격 없음");
-  let amountMinor: number;
-  if (currency === "USD") {
-    if (p.m % 10_000 !== 0) throw new ServiceError("bad_price", "USD 가격은 센트 단위여야 함");
-    amountMinor = p.m / 10_000;
-  } else {
-    const locked = existing?.a;
-    if (!locked && !fxRateMicro) throw new ServiceError("fx_unavailable", "환율을 확인할 수 없어 원화 가격을 만들 수 없음");
-    amountMinor = locked ?? ceilTo(usdMicroToWon(p.m, fxRateMicro!), KRW_LIST_ROUNDING);
-  }
-  const created = await stripe.createMonthlyPrice({ name: p.name, currency, amountMinor, metadata: { cloudpress_price_id: priceId } }, `price:${priceId}:${currency}`);
-  await db.prepare("INSERT INTO price_amounts(price_id,currency,amount_minor,fx_rate_micro,stripe_price_id,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(price_id,currency) DO UPDATE SET stripe_price_id = COALESCE(price_amounts.stripe_price_id, excluded.stripe_price_id)")
-    .bind(priceId, currency, amountMinor, currency === "KRW" ? fxRateMicro : null, created.priceId, nowIso(nowMs)).run();
-  const row = (await db.prepare("SELECT amount_minor AS a, stripe_price_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string }>())!;
-  return { stripePriceId: row.s, amountMinor: row.a };
+  if (p.m % 10_000 !== 0) throw new ServiceError("bad_price", "USD 가격은 센트 단위여야 함");
+  const amountMinor = p.m / 10_000;
+  const created = await paypal.createMonthlyPlan({ name: `CloudPress ${p.name}`, currency, amountMinor, customId: priceId }, `${priceId}:${currency}`);
+  await db.prepare("INSERT INTO price_amounts(price_id,currency,amount_minor,paypal_plan_id,created_at) VALUES(?,?,?,?,?) ON CONFLICT(price_id,currency) DO UPDATE SET paypal_plan_id = COALESCE(price_amounts.paypal_plan_id, excluded.paypal_plan_id)")
+    .bind(priceId, currency, amountMinor, created.planId, nowIso(nowMs)).run();
+  const row = (await db.prepare("SELECT amount_minor AS a, paypal_plan_id AS s FROM price_amounts WHERE price_id = ? AND currency = ?").bind(priceId, currency).first<{ a: number; s: string }>())!;
+  return { paypalPlanId: row.s, amountMinor: row.a };
 }
 
-export interface CheckoutCtx { appOrigin: string; nowMs: number; fxRateMicro: number | null }
+export interface CheckoutCtx { appOrigin: string; nowMs: number; fxRateMicro?: number | null }
 
-/** 서비스별 독립 구독: 구독 행(incomplete)을 만들고 Stripe Checkout 으로 보낸다. 활성화는 웹훅(invoice.paid)에서만. */
-export async function createSubscriptionCheckout(db: D1Like, stripe: StripePort, userId: string, productId: string, currency: Cur, ctx: CheckoutCtx) {
+/** 구독 결제 시작: 결제 전(incomplete) 구독을 만들고 PayPal 승인 URL 을 돌려준다. 활성화는 웹훅(PAYMENT.SALE.COMPLETED)으로만 한다. */
+export async function createSubscriptionCheckout(db: D1Like, paypal: PayPalPort, userId: string, productId: string, currency: Cur, ctx: CheckoutCtx) {
+  assertPayPalCurrency(currency);
   const prod = await db.prepare("SELECT id, on_sale FROM products WHERE id = ?").bind(productId).first<{ id: string; on_sale: number }>();
   if (!prod || prod.on_sale !== 1) throw new ServiceError("not_for_sale", "판매 중인 상품이 아님");
   const price = await db.prepare("SELECT id FROM prices WHERE product_id = ? AND retired_at IS NULL ORDER BY version DESC LIMIT 1").bind(productId).first<{ id: string }>();
-  if (!price) throw new ServiceError("not_for_sale", "판매 가격이 없음");
-  const customer = await ensureStripeCustomer(db, stripe, userId);
-  const { stripePriceId } = await ensureStripePrice(db, stripe, price.id, currency, ctx.fxRateMicro, ctx.nowMs);
+  if (!price) throw new ServiceError("not_for_sale", "판매 가능한 가격이 없음");
+  const user = await db.prepare("SELECT email FROM users WHERE id = ?").bind(userId).first<{ email: string }>();
+  if (!user) throw new ServiceError("not_found", "사용자 없음");
+  const { paypalPlanId } = await ensurePayPalPlan(db, paypal, price.id, currency, ctx.nowMs);
   const subId = newId("sub");
-  await db.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,stripe_customer_id,stripe_price_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'incomplete',?,?)")
-    .bind(subId, userId, productId, price.id, customer, stripePriceId, nowIso(ctx.nowMs), nowIso(ctx.nowMs)).run();
-  const s = await stripe.createCheckoutSession({ mode: "subscription", customer, priceId: stripePriceId, clientReferenceId: subId, metadata: { cloudpress_subscription_id: subId }, successUrl: `${ctx.appOrigin}/dashboard?checkout=success`, cancelUrl: `${ctx.appOrigin}/dashboard?checkout=cancel` }, `checkout:sub:${subId}`);
-  await audit(db, { actorId: userId, action: "checkout.subscription", targetType: "subscription", targetId: subId, detail: { productId, currency } }, ctx.nowMs);
-  return { subscriptionId: subId, url: s.url };
+  // custom_id 로 우리 구독 ID 를 PayPal 에 심어 두면 웹훅에서 정확히 연결된다(최대 127자).
+  const s = await paypal.createSubscription({ planId: paypalPlanId, customId: subId, email: user.email,
+    returnUrl: `${ctx.appOrigin}/dashboard?checkout=success`, cancelUrl: `${ctx.appOrigin}/services/create?checkout=cancel` }, `sub:${subId}`);
+  await db.prepare("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,paypal_plan_id,paypal_subscription_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'incomplete',?,?)")
+    .bind(subId, userId, productId, price.id, paypalPlanId, s.id, nowIso(ctx.nowMs), nowIso(ctx.nowMs)).run();
+  await audit(db, { actorId: userId, action: "checkout.subscription", targetType: "subscription", targetId: subId, detail: { productId, currency, provider: "paypal" } }, ctx.nowMs);
+  return { subscriptionId: subId, url: s.approveUrl };
 }
 
-/** 도메인 결제: 견적이 유효하고 본인 주문일 때만. 금액·통화는 견적에 고정된 값을 그대로 사용한다(클라이언트 입력을 신뢰하지 않음). */
-export async function createDomainCheckout(db: D1Like, stripe: StripePort, userId: string, orderId: string, ctx: CheckoutCtx) {
+/** 도메인 구매 결제: 견적이 유효할 때만 PayPal 주문(일회성)을 만든다. 결제 확정은 캡처 + 웹훅으로만 한다. */
+export async function createDomainCheckout(db: D1Like, paypal: PayPalPort, userId: string, orderId: string, ctx: CheckoutCtx) {
   const o = await db.prepare("SELECT id,hostname,status,charge_currency AS cur,charge_amount AS amt,quote_expires_at AS exp FROM domain_orders WHERE id = ? AND customer_id = ?").bind(orderId, userId).first<{ id: string; hostname: string; status: string; cur: Cur; amt: number | null; exp: string }>();
-  if (!o) throw new ServiceError("not_found", "주문을 찾을 수 없음");
+  if (!o) throw new ServiceError("not_found", "주문이 없거나 권한 없음");
   if (o.status !== "awaiting_payment") throw new ServiceError("bad_state", "결제할 수 없는 주문 상태");
   if (Date.parse(o.exp) <= ctx.nowMs) throw new ServiceError("quote_expired", "견적이 만료됨. 다시 견적을 받으세요.");
-  if (!o.amt) throw new ServiceError("bad_price", "견적 금액이 없음");
-  const customer = await ensureStripeCustomer(db, stripe, userId);
-  const sec = Math.floor(ctx.nowMs / 1000) + 31 * 60; // Checkout 만료는 최소 30분. 견적이 먼저 만료돼도 결제 도착 시 원가 변동 검사를 거친다.
-  const s = await stripe.createCheckoutSession({ mode: "payment", customer, inline: { currency: o.cur, amountMinor: o.amt, name: `도메인 등록 1년: ${o.hostname}` }, clientReferenceId: o.id, metadata: { domain_order_id: o.id }, expiresAtSec: sec, successUrl: `${ctx.appOrigin}/domains?order=${o.id}`, cancelUrl: `${ctx.appOrigin}/domains?cancel=${o.id}` }, `checkout:domain:${o.id}`);
+  if (!o.amt) throw new ServiceError("bad_price", "주문 금액이 없음");
+  assertPayPalCurrency(o.cur);
+  const ord = await paypal.createOrder({ customId: o.id, currency: o.cur, amountMinor: o.amt, description: `도메인 등록 1년: ${o.hostname}`,
+    returnUrl: `${ctx.appOrigin}/api/paypal/return?kind=domain&order=${encodeURIComponent(o.id)}`, cancelUrl: `${ctx.appOrigin}/domains?checkout=cancel` }, `domain:${o.id}`);
+  await db.prepare("UPDATE domain_orders SET paypal_order_id = ?, updated_at = ? WHERE id = ? AND status = 'awaiting_payment'").bind(ord.id, nowIso(ctx.nowMs), o.id).run();
   await audit(db, { actorId: userId, action: "checkout.domain", targetType: "domain_order", targetId: o.id }, ctx.nowMs);
-  return { url: s.url };
+  return { url: ord.approveUrl };
 }
 
-export async function createPortal(db: D1Like, stripe: StripePort, userId: string, appOrigin: string) {
-  const u = await db.prepare("SELECT stripe_customer_id AS c FROM users WHERE id = ?").bind(userId).first<{ c: string | null }>();
-  if (!u?.c) throw new ServiceError("no_customer", "결제 이력이 없어 포털을 열 수 없음");
-  return stripe.createPortalSession({ customer: u.c, returnUrl: `${appOrigin}/dashboard` });
+/** PayPal 에는 Stripe 같은 고객 포털이 없다. 구매자가 PayPal 계정의 자동 결제 관리 페이지에서 직접 관리한다. */
+export async function createPortal(_db: D1Like, _paypal: PayPalPort, _userId: string, _appOrigin: string, env: "sandbox" | "live" = "live") {
+  return { url: env === "sandbox" ? "https://www.sandbox.paypal.com/myaccount/autopay/" : "https://www.paypal.com/myaccount/autopay/" };
 }
 
-/** 결제가 끝나지 않은 채 방치된 구독 행 정리(24시간). */
+/** 승인 없이 방치된 결제 전 구독 정리(24시간). 결제 연결이 끝난 구독은 건드리지 않는다. */
 export async function expireIncompleteSubscriptions(db: D1Like, nowMs: number, ttlHours = 24): Promise<number> {
-  const r = await db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE status='incomplete' AND created_at < ? AND stripe_subscription_id IS NULL").bind(nowIso(nowMs), nowIso(nowMs - ttlHours * 3_600_000)).run();
+  const r = await db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE status='incomplete' AND created_at < ?").bind(nowIso(nowMs), nowIso(nowMs - ttlHours * 3_600_000)).run();
   return r.meta.changes;
+}
+
+/**
+ * 취소 예약(canceling) 구독의 이용 기간이 끝나면 canceled 로 확정하고 서비스 중지 작업을 만든다.
+ * PayPal 은 취소 즉시 CANCELLED 웹훅을 보내므로(기간 종료 시점 아님), 이용 종료는 우리 쪽에서 기간 만료로 처리한다.
+ */
+export async function finalizeCanceledSubscriptions(db: D1Like, nowMs: number): Promise<number> {
+  const { results } = await db.prepare("SELECT id FROM subscriptions WHERE status = 'canceling' AND current_period_end IS NOT NULL AND current_period_end <= ?").bind(nowIso(nowMs)).all<{ id: string }>();
+  for (const s of results) {
+    await db.batch([
+      db.prepare("UPDATE subscriptions SET status='canceled', updated_at=? WHERE id=? AND status='canceling'").bind(nowIso(nowMs), s.id),
+      db.prepare("INSERT OR IGNORE INTO deployment_jobs(id,kind,subscription_id,idempotency_key,created_at,updated_at) VALUES(?,?,?,?,?,?)").bind(newId("job"), "suspend", s.id, `suspend:${s.id}:period_end`, nowIso(nowMs), nowIso(nowMs)),
+    ]);
+  }
+  return results.length;
 }

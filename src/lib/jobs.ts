@@ -1,7 +1,7 @@
 import { type D1Like, newId, nowIso } from "./db";
 import { assertTransition, JOB_TRANSITIONS, type JobState } from "./states";
-import type { StripePort } from "./stripe.client";
-import { StripeError } from "./stripe.client";
+import type { PayPalPort } from "./paypal.client";
+import { PayPalError } from "./paypal.client";
 import { CfApiError } from "./cfApi";
 import type { RegistrarPort, NameserverPort } from "./registrar";
 import type { ZonesPort } from "./zones";
@@ -16,7 +16,7 @@ export interface Provisioner { provision(subId: string): Promise<void>; suspend(
 export interface JobContext {
   db: D1Like;
   nowMs: number;
-  stripe: StripePort;
+  paypal: PayPalPort;
   portFor(provider: string): RegistrarPort;
   nsPortFor(provider: string): NameserverPort;
   zones: ZonesPort;
@@ -35,7 +35,7 @@ export function backoffSeconds(attempt: number, jitter = 0.5): number {
 function classify(e: unknown): "retry" | "permanent" {
   if (e instanceof PermanentError) return "permanent";
   if (e instanceof RetryableError) return "retry";
-  if (e instanceof CfApiError || e instanceof StripeError) return e.retryable ? "retry" : "permanent";
+  if (e instanceof CfApiError || e instanceof PayPalError) return e.retryable ? "retry" : "permanent";
   return "retry"; // 알 수 없는 오류는 최대 시도 횟수까지만 재시도
 }
 
@@ -62,12 +62,12 @@ export const HANDLERS: Record<string, Handler> = {
 
   async refund_domain_order(job, ctx) {
     const { orderId } = JSON.parse(job.payload_json) as { orderId: string };
-    const o = await ctx.db.prepare("SELECT status, stripe_payment_intent_id AS pi FROM domain_orders WHERE id = ?").bind(orderId).first<{ status: string; pi: string | null }>();
+    const o = await ctx.db.prepare("SELECT status, stripe_payment_intent_id AS pi FROM domain_orders /* 외부 결제 참조 = PayPal capture id */ WHERE id = ?").bind(orderId).first<{ status: string; pi: string | null }>();
     if (!o) throw new PermanentError("주문 없음");
     if (o.status === "refunded") return;
     if (o.status !== "refund_due") throw new PermanentError(`환불 대상이 아닌 상태: ${o.status}`); // 등록 완료 주문은 환불하지 않는다
     if (!o.pi) throw new PermanentError("결제 정보 없음");
-    await ctx.stripe.createRefund({ paymentIntent: o.pi, metadata: { domain_order_id: orderId } }, `refund:${orderId}`);
+    await ctx.paypal.refundCapture({ captureId: o.pi, note: "도메인 등록 실패로 인한 전액 환불" }, `refund:${orderId}`);
     await markRefunded(ctx.db, orderId, ctx.nowMs);
   },
 
