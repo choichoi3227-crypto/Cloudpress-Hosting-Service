@@ -3,6 +3,8 @@ import { assertTransition, JOB_TRANSITIONS, type JobState } from "./states";
 import type { PayPalPort } from "./paypal.client";
 import { PayPalError } from "./paypal.client";
 import { CfApiError } from "./cfApi";
+import { OFFICIAL_INSTANCE_TYPES } from "./catalog";
+import { desiredInstance } from "./cpuAddons";
 import type { RegistrarPort, NameserverPort } from "./registrar";
 import type { ZonesPort } from "./zones";
 import { runRegistration, pollRegistration, adoptRegisteredZone, delegateNameservers, markRefunded, type Crypto } from "./domainOrders";
@@ -11,7 +13,9 @@ export class RetryableError extends Error {}
 export class PermanentError extends Error {}
 
 /** 컨테이너·DB 프로비저닝 포트. 컨테이너 매니저 구현 전까지 운영(live)에서는 연결되지 않으며, 그때 작업은 폐기 후 운영자 알림으로 드러난다. */
-export interface Provisioner { provision(subId: string): Promise<void>; suspend(subId: string): Promise<void>; resume(subId: string): Promise<void> }
+export interface Provisioner { provision(subId: string): Promise<void>; suspend(subId: string): Promise<void>; resume(subId: string): Promise<void>;
+  /** 컨테이너를 공식 지원 인스턴스 사양으로 변경(안전한 교체 포함). 데이터·비밀정보를 보존해야 한다. */
+  resize(containerId: string, to: string): Promise<void> }
 
 export interface JobContext {
   db: D1Like;
@@ -74,6 +78,25 @@ export const HANDLERS: Record<string, Handler> = {
   async provision(job, ctx) { await need(ctx).provision(job.subscription_id!); },
   async suspend(job, ctx) { await need(ctx).suspend(job.subscription_id!); },
   async resume(job, ctx) { await need(ctx).resume(job.subscription_id!); },
+  // 추가 CPU 적용: 결제(구매 상태)와 별개로 실제 적용 상태를 기록한다. 실패하면 재시도하고, 끝내 실패하면 운영자에게 알린다(dead).
+  async cpu_resize(job, ctx) {
+    const { containerId } = JSON.parse(job.payload_json) as { containerId: string };
+    const want = await desiredInstance(ctx.db, containerId);
+    if (!want) throw new PermanentError("container_not_found");
+    await ctx.db.prepare("UPDATE cpu_addons SET apply_status='applying', attempts=attempts+1 WHERE container_id=? AND purchase_status='paid' AND apply_status IN ('not_started','queued','failed','applying')").bind(containerId).run();
+    try {
+      if (want.instance !== want.current) await need(ctx).resize(containerId, want.instance);
+      const spec = OFFICIAL_INSTANCE_TYPES[want.instance];
+      await ctx.db.batch([
+        ctx.db.prepare("UPDATE containers SET instance_type=?, actual_vcpu=? WHERE id=?").bind(want.instance, spec.vcpu, containerId),
+        ctx.db.prepare("UPDATE cpu_addons SET apply_status='applied', applied_at=?, last_error=NULL WHERE container_id=? AND purchase_status='paid' AND apply_status='applying'").bind(nowIso(ctx.nowMs), containerId),
+      ]);
+    } catch (e) {
+      const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
+      await ctx.db.prepare("UPDATE cpu_addons SET apply_status='failed', last_error=? WHERE container_id=? AND purchase_status='paid' AND apply_status='applying'").bind(msg, containerId).run();
+      throw e; // 재시도/운영자 알림은 processJob 이 처리한다. 기존 컨테이너는 변경하지 않았으므로 데이터가 손상되지 않는다.
+    }
+  },
 };
 function need(ctx: JobContext): Provisioner {
   if (!ctx.provisioner) throw new PermanentError("provisioner_not_connected: 컨테이너 매니저가 연결되지 않음");

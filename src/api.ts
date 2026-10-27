@@ -5,10 +5,11 @@ import type { Env } from "./worker";
 import { buildRuntime } from "./runtime";
 import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
 import { applyDomainCapture } from "./lib/webhooks";
-import { parseCurrency, latestFxRate } from "./lib/currency";
+import { quoteCpuAddon, purchaseCpuAddon, loadCpuPolicy, saveCpuPolicy } from "./lib/cpuAddons";
+import { parseCurrency } from "./lib/currency";
 import { recordFxSample } from "./lib/fxStore";
 import { ServiceError, connectDomain } from "./lib/zoneService";
-import { createQuoteRouted } from "./lib/domainOrders";
+import { createQuote } from "./lib/domainOrders";
 
 export interface ApiCtx {
   req: Request;
@@ -30,7 +31,6 @@ const add = (method: string, path: string, h: Handler, admin = false) =>
 const all = async <T = any>(db: D1Like, sql: string, ...b: unknown[]): Promise<T[]> => (await db.prepare(sql).bind(...b).all<T>()).results;
 const one = async <T = any>(db: D1Like, sql: string, ...b: unknown[]): Promise<T | null> => db.prepare(sql).bind(...b).first<T>();
 const parseJson = <T>(s: string | null | undefined, d: T): T => { try { return s ? (JSON.parse(s) as T) : d; } catch { return d; } };
-const fxOf = (db: D1Like) => latestFxRate(db);
 
 /** 라우터. 일치하는 라우트가 없으면 null(호출자가 404 처리). */
 export async function routeApi(c: ApiCtx): Promise<Response | null> {
@@ -136,6 +136,54 @@ add("GET", "/api/paypal/return", async (c) => {
   }
 });
 
+/* ───────────── 추가 CPU ───────────── */
+
+add("GET", "/api/services/:id/cpu-addons", async (c, m) => {
+  const own = await one(c.env.DB, "SELECT id FROM subscriptions WHERE id = ? AND customer_id = ?", m[1], c.session.user.id);
+  if (!own) return c.json({ error: "not_found" }, 404);
+  const policy = await loadCpuPolicy(c.env.DB);
+  const rows = await all(c.env.DB, "SELECT id, add_vcpu, monthly_micro, from_instance_type, to_instance_type, purchase_status, apply_status, last_error, current_period_end, cancel_at_period_end, created_at FROM cpu_addons WHERE subscription_id = ? AND purchase_status != 'cancelled' ORDER BY created_at DESC", m[1]);
+  const container = await one(c.env.DB, "SELECT instance_type, target_vcpu, actual_vcpu FROM containers WHERE subscription_id = ? AND deleted_at IS NULL", m[1]);
+  return c.json({
+    tiers: Object.entries(policy.prices).map(([v, p]) => ({ addVcpu: Number(v), monthlyMicro: p })), maxTotalAddVcpu: policy.maxTotalAddVcpu,
+    container: container ? { instanceType: container.instance_type, targetVcpu: container.target_vcpu, actualVcpu: container.actual_vcpu } : null,
+    addons: rows.map((r: any) => ({ id: r.id, addVcpu: r.add_vcpu, monthlyMicro: r.monthly_micro, fromInstance: r.from_instance_type, toInstance: r.to_instance_type, purchaseStatus: r.purchase_status, applyStatus: r.apply_status, lastError: r.last_error, currentPeriodEnd: r.current_period_end, cancelAtPeriodEnd: !!r.cancel_at_period_end })),
+  });
+});
+
+add("POST", "/api/services/:id/cpu-addons/quote", async (c, m) => {
+  const b = await c.body(512);
+  const q = await quoteCpuAddon(c.env.DB, c.session.user.id, m[1]!, Number(b?.addVcpu));
+  return c.json(q);
+});
+
+add("POST", "/api/services/:id/cpu-addons", async (c, m) => {
+  const b = await c.body(512);
+  const r = await purchaseCpuAddon(c.env.DB, buildRuntime(c.env).paypal, c.session.user.id, m[1]!, Number(b?.addVcpu), { appOrigin: c.env.APP_ORIGIN, nowMs: c.now });
+  return c.json({ ok: true, id: r.id, url: r.url, quote: r.quote }, 201);
+});
+
+// 취소: PayPal 해지(다음 결제 중단) + 결제한 기간은 유지, 다음 갱신일(기간 종료)부터 축소.
+add("POST", "/api/cpu-addons/:id/cancel", async (c, m) => {
+  const a = await one<{ id: string; pp: string | null; status: string }>(c.env.DB, `SELECT a.id, a.paypal_subscription_id AS pp, a.purchase_status AS status FROM cpu_addons a JOIN subscriptions s ON s.id = a.subscription_id WHERE a.id = ? AND s.customer_id = ?`, m[1], c.session.user.id);
+  if (!a) return c.json({ error: "not_found" }, 404);
+  if (a.status !== "paid") return c.json({ error: "bad_state", message: "취소할 수 없는 상태입니다." }, 409);
+  if (a.pp) {
+    try { await buildRuntime(c.env).paypal.cancelSubscription(a.pp, "고객 요청 추가 CPU 취소"); }
+    catch (e: any) { return c.json({ error: "paypal_error", message: "PayPal 해지에 실패했습니다. 잠시 후 다시 시도하세요." }, e?.retryable ? 503 : 502); }
+  }
+  await c.env.DB.prepare("UPDATE cpu_addons SET cancel_at_period_end = 1 WHERE id = ?").bind(a.id).run();
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "cpu_addon.cancel", targetType: "cpu_addon", targetId: a.id }, c.now);
+  return c.json({ ok: true, cancelAtPeriodEnd: true });
+});
+
+add("GET", "/api/admin/cpu-policy", async (c) => c.json(await loadCpuPolicy(c.env.DB)), true);
+add("PUT", "/api/admin/cpu-policy", async (c) => {
+  const b = await c.body(4096);
+  if (!b) return c.json({ error: "bad_request" }, 400);
+  return c.json(await saveCpuPolicy(c.env.DB, c.session.user.id, b, c.now));
+}, true);
+
 add("POST", "/api/billing/portal", async (c) => {
   const rt = buildRuntime(c.env);
   return c.json(await createPortal(c.env.DB, rt.paypal, c.session.user.id, c.env.APP_ORIGIN, rt.paypalEnv));
@@ -226,7 +274,7 @@ add("POST", "/api/domains/quote", async (c) => {
   const b = await c.body(8192);
   if (!b || typeof b.hostname !== "string" || typeof b.contact !== "object") return c.json({ error: "bad_request" }, 400);
   const rt = buildRuntime(c.env);
-  const r = await createQuoteRouted(c.env.DB, rt.ports, rt.crypto, { customerId: c.session.user.id, hostname: b.hostname, contact: b.contact, nowMs: c.now, currency: parseCurrency(b.currency ?? "USD"), fxRateMicro: await fxOf(c.env.DB) } as any);
+  const r = await createQuote(c.env.DB, rt.registrar, rt.crypto, { customerId: c.session.user.id, hostname: b.hostname, contact: b.contact, nowMs: c.now });
   return c.json(r, 201);
 });
 

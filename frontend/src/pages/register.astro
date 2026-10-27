@@ -1,5 +1,5 @@
 ---
-import Layout from '../layouts/Layout.astro';
+import Layout from '@/layouts/Layout.astro';
 ---
 
 <Layout title="회원가입 - CloudPress">
@@ -14,18 +14,20 @@ import Layout from '../layouts/Layout.astro';
         <label for="email" class="block text-sm font-medium mb-1">이메일</label>
         <input type="email" id="email" name="email" required class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
       </div>
+
       <div>
         <label for="password" class="block text-sm font-medium mb-1">비밀번호</label>
         <input type="password" id="password" name="password" required minlength="8" class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
         <p class="text-xs text-gray-500 mt-1">최소 8자 이상</p>
       </div>
+
       <div>
         <label for="confirm-password" class="block text-sm font-medium mb-1">비밀번호 확인</label>
         <input type="password" id="confirm-password" name="confirm-password" required class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
       </div>
-      
+
       <div id="error-message" class="hidden text-red-600 text-sm py-2"></div>
-      
+
       <button type="submit" class="w-full bg-primary hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors">
         가입하기
       </button>
@@ -37,47 +39,6 @@ import Layout from '../layouts/Layout.astro';
   </div>
 
   <script>
-    const form = document.getElementById('register-form') as HTMLFormElement;
-    const errorMessage = document.getElementById('error-message') as HTMLDivElement;
-
-    if (form) {
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const email = (document.getElementById('email') as HTMLInputElement).value;
-        const password = (document.getElementById('password') as HTMLInputElement).value;
-        const confirmPassword = (document.getElementById('confirm-password') as HTMLInputElement).value;
-
-        if (password !== confirmPassword) {
-          if (errorMessage) {
-            errorMessage.textContent = '비밀번호가 일치하지 않습니다.';
-            errorMessage.classList.remove('hidden');
-          }
-          return;
-        }
-
-        try {
-          const response = await fetch('/api/auth/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
-          });
-
-          if (response.ok) {
-            window.location.href = '/login';
-          } else {
-            const data = await response.json();
-            if (errorMessage) {
-              errorMessage.textContent = data.message || '회원가입에 실패했습니다.';
-              errorMessage.classList.remove('hidden');
-            }
-          }
-        } catch (err) {
-          if (errorMessage) {
-            errorMessage.textContent = '서버와의 통신 중 오류가 발생했습니다.';
-            errorMessage.classList.remove('hidden');
-          }
-        }
-      });
-    }
+    import '@/scripts/register.ts';
   </script>
 </Layout>

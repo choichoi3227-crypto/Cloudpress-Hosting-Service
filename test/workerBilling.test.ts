@@ -24,52 +24,46 @@ function env(over: Partial<Env> = {}) {
 describe("결제·도메인 API 라우트(모의 모드)", () => {
   it("로그인·CSRF 없이는 거부", async () => {
     const { env: e } = env();
-    expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "USD" }), e)).status).toBe(401);
+    expect((await worker.fetch(post("/api/subscriptions", { productId: "ccs-basic", currency: "USD" }), e)).status).toBe(401);
     const s = await session(e);
-    expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "USD" }, { ...s, csrf: "wrong" }), e)).status).toBe(403);
+    expect((await worker.fetch(post("/api/subscriptions", { productId: "ccs-basic", currency: "USD" }, { ...s, csrf: "wrong" }), e)).status).toBe(403);
   });
-  it("구독 체크아웃 생성(USD), 잘못된 통화·상품은 거부", async () => {
+  it("구독 결제 시작(USD): PayPal 승인 URL, incomplete 구독 생성. 미지원 통화·없는 상품은 400", async () => {
     const { env: e, raw } = env(); const s = await session(e);
-    const ok = await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "USD" }, s), e);
+    const ok = await worker.fetch(post("/api/subscriptions", { productId: "ccs-basic", currency: "USD" }, s), e);
     expect(ok.status).toBe(201);
     expect(((await ok.json()) as any).url).toContain("paypal.test");
     expect(raw.prepare("select status s from subscriptions").get()).toMatchObject({ s: "incomplete" });
-    expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "EUR" }, s), e)).status).toBe(400);
-    expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ghost", currency: "USD" }, s), e)).status).toBe(400);
+    expect((await worker.fetch(post("/api/subscriptions", { productId: "ccs-basic", currency: "KRW" }, s), e)).status).toBe(400); // PayPal 은 KRW 미지원
+    expect((await worker.fetch(post("/api/subscriptions", { productId: "ccs-basic", currency: "EUR" }, s), e)).status).toBe(400);
+    expect((await worker.fetch(post("/api/subscriptions", { productId: "ghost", currency: "USD" }, s), e)).status).toBe(400);
   });
-  it("원화 결제는 환율이 없으면 503, 관리자가 환율을 넣으면 진행", async () => {
+  it("환율 설정은 관리자만, 도메인 견적(USD)→PayPal 결제 URL, 남의 주문은 404", async () => {
     const { env: e, raw } = env();
     const user = await session(e, "u@example.com");
-    expect((await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "KRW" }, user), e)).status).toBe(400); // fx_unavailable(ServiceError)
-    expect((await worker.fetch(post("/api/domains/quote", { hostname: "shop.com", currency: "KRW", contact }, user), e)).status).toBe(503);
-    expect((await worker.fetch(post("/api/admin/fx", { wonPerUsd: 1400 }, user), e)).status).toBe(403); // 일반 사용자는 환율 입력 불가
+    expect((await worker.fetch(post("/api/admin/fx", { wonPerUsd: 1400 }, user), e)).status).toBe(403); // 일반 사용자는 환율 변경 불가
     const admin = await session(e, "admin@example.com", "admin");
     const fx = await worker.fetch(post("/api/admin/fx", { wonPerUsd: 1400 }, admin), e);
     expect(((await fx.json()) as any).status).toBe("accepted");
     expect((await worker.fetch(post("/api/admin/fx", { wonPerUsd: -5 }, admin), e)).status).toBe(400);
-    const q = await worker.fetch(post("/api/domains/quote", { hostname: "shop.com", currency: "KRW", contact }, user), e);
+    expect(raw.prepare("select count(*) c from audit_logs where action='admin.fx_update'").get()).toMatchObject({ c: 1 });
+    const q = await worker.fetch(post("/api/domains/quote", { hostname: "shop.com", contact }, user), e);
     expect(q.status).toBe(201);
     const qb = (await q.json()) as any;
-    expect(qb).toMatchObject({ currency: "KRW", hostname: "shop.com" });
-    expect(qb.chargeAmount % 100).toBe(0);
-    const co = await worker.fetch(post("/api/checkout/domain", { orderId: qb.orderId }, user), e);
+    expect(qb).toMatchObject({ currency: "USD", hostname: "shop.com" });
+    expect(Number.isInteger(qb.chargeAmount)).toBe(true);
+    const co = await worker.fetch(post(`/api/domains/orders/${qb.orderId}/checkout`, {}, user), e);
     expect(co.status).toBe(200);
-    expect(raw.prepare("select count(*) c from audit_logs where action='admin.fx'").get()).toMatchObject({ c: 1 });
+    expect(((await co.json()) as any).url).toContain("paypal.test");
+    const other = await session(e, "b@example.com");
+    expect((await worker.fetch(post(`/api/domains/orders/${qb.orderId}/checkout`, {}, other), e)).status).toBe(404);
   });
-  it("다른 사용자의 주문으로는 결제 불가", async () => {
-    const { env: e } = env();
-    const a = await session(e, "a@example.com"); const admin = await session(e, "admin@example.com", "admin");
-    await worker.fetch(post("/api/admin/fx", { wonPerUsd: 1400 }, admin), e);
-    const q = (await (await worker.fetch(post("/api/domains/quote", { hostname: "mine.com", currency: "USD", contact }, a), e)).json()) as any;
-    const b = await session(e, "b@example.com");
-    expect((await worker.fetch(post("/api/checkout/domain", { orderId: q.orderId }, b), e)).status).toBe(404);
-  });
-  it("live 모드에서 비밀 값이 없으면 연결된 것처럼 동작하지 않고 503", async () => {
+  it("live 모드에서 PayPal·Cloudflare 설정이 없으면 결제를 시작하지 않고 503", async () => {
     const { env: e } = env({ CLOUDPRESS_MODE: "live" });
     const s = await session(e);
-    const r = await worker.fetch(post("/api/checkout/subscription", { productId: "ccs-basic", currency: "USD" }, s), e);
+    const r = await worker.fetch(post("/api/subscriptions", { productId: "ccs-basic", currency: "USD" }, s), e);
     expect(r.status).toBe(503);
-    expect(((await r.json()) as any).message).toContain("STRIPE_SECRET_KEY");
+    expect(((await r.json()) as any).message).toContain("PAYPAL_CLIENT_ID");
   });
   it("큐/크론 핸들러가 존재하고 모의 모드에서 오류 없이 실행", async () => {
     const { env: e, raw } = env();

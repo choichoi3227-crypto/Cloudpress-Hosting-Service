@@ -2,7 +2,6 @@ import type { Env } from "./worker";
 import { PayPalHttp, MockPayPal, type PayPalPort } from "./lib/paypal.client";
 import { CfClient } from "./lib/cfApi";
 import { CloudflareRegistrar, MockRegistrar, type RegistrarPort, type NameserverPort } from "./lib/registrar";
-import { GabiaRegistrar, MockGabiaClient, type PortMap } from "./lib/registrarRouter";
 import { CloudflareZones, MockZones, type ZonesPort } from "./lib/zones";
 import { encryptSecret, decryptSecret } from "./lib/crypto";
 import type { Crypto } from "./lib/domainOrders";
@@ -10,12 +9,16 @@ import type { Provisioner } from "./lib/jobs";
 
 export class ConfigError extends Error {}
 
+/** Cloudflare Registrar 로 등록한 도메인은 네임서버 위임이 필요 없다. 다른 등록기관은 지원하지 않으므로 호출되면 오류로 드러낸다(조용한 no-op 금지). */
+const noNameserverDelegation = (): NameserverPort => ({ setNameservers: async () => { throw new Error("nameserver_delegation_not_supported"); } });
+
 export interface Runtime {
   mode: "mock" | "live";
   paypal: PayPalPort;
   /** PayPal 환경(sandbox|live). 고객 자동결제 관리 링크 등에 쓴다. */
   paypalEnv: "sandbox" | "live";
-  ports: PortMap;
+  /** 도메인 등록 기관(Cloudflare Registrar). 견적·등록·상태 조회에 쓴다. */
+  registrar: RegistrarPort;
   portFor(provider: string): RegistrarPort;
   nsPortFor(provider: string): NameserverPort;
   zones: ZonesPort;
@@ -34,9 +37,9 @@ let mock: Runtime | null = null;
 export function buildRuntime(env: Env): Runtime {
   if (env.CLOUDPRESS_MODE !== "live") {
     if (!mock) {
-      const cf = new MockRegistrar(); const gc = new MockGabiaClient(); const gabia = new GabiaRegistrar(gc);
+      const cf = new MockRegistrar();
       const crypto: Crypto = { encrypt: (p, a) => encryptSecret(p, DEV_ONLY_KEY, a), decrypt: (t, a) => decryptSecret(t, DEV_ONLY_KEY, a) };
-      mock = { mode: "mock", paypal: new MockPayPal(), paypalEnv: "sandbox", ports: { cloudflare: cf, gabia }, portFor: (p) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones: new MockZones(), crypto, provisioner: { provision: async () => {}, suspend: async () => {}, resume: async () => {} } };
+      mock = { mode: "mock", paypal: new MockPayPal(), paypalEnv: "sandbox", registrar: cf, portFor: () => cf, nsPortFor: noNameserverDelegation, zones: new MockZones(), crypto, provisioner: { provision: async () => {}, suspend: async () => {}, resume: async () => {}, resize: async () => {} } };
     }
     return mock;
   }
@@ -44,15 +47,16 @@ export function buildRuntime(env: Env): Runtime {
   if (missing.length) throw new ConfigError(`live 모드에 필요한 비밀 값이 없음: ${missing.join(", ")}`);
   const cf = new CfClient({ token: env.CLOUDFLARE_API_TOKEN!, accountId: env.CLOUDFLARE_ACCOUNT_ID! });
   const registrar = new CloudflareRegistrar(cf);
-  const gabia = new GabiaRegistrar(null); // 가비아 파트너 계약·API 명세 전에는 연결하지 않음(호출 시 ProviderNotConfigured)
+  // 가비아 파트너 계약·API 명세 전에는 연결하지 않음(호출 시 ProviderNotConfigured)
   const key = env.SECRETS_ENCRYPTION_KEY!;
   return {
     mode: "live",
     paypal: new PayPalHttp({ clientId: env.PAYPAL_CLIENT_ID!, clientSecret: env.PAYPAL_CLIENT_SECRET!, env: env.PAYPAL_ENV === "sandbox" ? "sandbox" : "live" }),
     paypalEnv: env.PAYPAL_ENV === "sandbox" ? "sandbox" : "live",
-    ports: { cloudflare: registrar }, // 가비아는 설정 후에만 라우팅 대상에 포함
-    portFor: (p) => (p === "gabia" ? gabia : registrar),
-    nsPortFor: (p) => (p === "gabia" ? gabia : { setNameservers: async () => {} }),
+    registrar,
+    // 가비아는 설정 후에만 라우팅 대상에 포함
+    portFor: () => registrar,
+    nsPortFor: noNameserverDelegation,
     zones: new CloudflareZones(cf),
     crypto: { encrypt: (p, a) => encryptSecret(p, key, a), decrypt: (t, a) => decryptSecret(t, key, a) },
     provisioner: null, // 컨테이너 매니저 구현 전: 프로비저닝 작업은 폐기·운영자 알림으로 드러난다

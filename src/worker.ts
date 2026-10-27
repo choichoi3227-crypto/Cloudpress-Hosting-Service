@@ -5,7 +5,6 @@ import { MemoryRateLimiter, type RateLimiter } from "./lib/ratelimit";
 import { dispatchOutbox } from "./lib/outbox";
 import { buildRuntime, ConfigError } from "./runtime";
 import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
-import { createQuoteRouted } from "./lib/domainOrders";
 import { ServiceError } from "./lib/zoneService";
 import { consumeBatch } from "./lib/jobs";
 import { runScheduled } from "./lib/scheduler";
@@ -27,7 +26,8 @@ export interface Env {
   SECRETS_ENCRYPTION_KEY?: string;
   CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
-  ASSETS: any;
+  /** 정적 자산 바인딩(wrangler.jsonc assets). 테스트 환경에는 없을 수 있다. */
+  ASSETS?: { fetch(req: Request): Promise<Response> };
 }
 
 const limiter: RateLimiter = new MemoryRateLimiter();
@@ -187,7 +187,7 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
     console.error("[API Fatal Error]", e?.message, e?.stack);
     // 후속 마이그레이션(0007~0009)이 적용되지 않은 DB 에서 해당 기능만 실패하는 경우를 명확히 알린다.
     if (/no such table/i.test(String(e?.message))) return json({ error: "schema_not_ready", message: "데이터베이스 마이그레이션이 최신이 아닙니다. 운영자가 'wrangler d1 migrations apply'를 실행해야 합니다." }, 503);
-    if (e instanceof ServiceError) return json({ error: e.code, message: e.message }, e.code === "not_found" ? 404 : 400);
+    if (e instanceof ServiceError) return json({ error: e.code, message: e.message }, e.code === "not_found" ? 404 : ["bad_state", "pending_exists", "limit_exceeded", "no_container"].includes(e.code) ? 409 : 400);
     if (e instanceof ForbiddenError) return json({ error: "forbidden" }, 403);
     if (e instanceof ConfigError) return json({ error: "not_configured", message: e.message }, 503);
     return json({ error: "internal_error", details: e?.message }, 500);
@@ -195,12 +195,13 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(req: Request, env: Env, ctx: any): Promise<Response> {
+  async fetch(req: Request, env: Env, _ctx?: any): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname.startsWith("/api/")) {
       return handleApi(req, env);
     }
 
+    if (!env.ASSETS) return new Response("not found", { status: 404 });
     const assetResponse = await env.ASSETS.fetch(req);
 
     // 서비스 상세(/services/<구독ID>)는 정적 플레이스홀더 페이지를 서빙하고 클라이언트가 ID 를 읽는다.

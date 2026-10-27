@@ -1,6 +1,7 @@
 import { type D1Like, type QueueLike } from "./db";
 import { expireQuotes } from "./domainOrders";
 import { expireIncompleteSubscriptions, finalizeCanceledSubscriptions } from "./checkout";
+import { finalizeCpuAddons } from "./cpuAddons";
 import { recoverStuckJobs } from "./jobs";
 import { dispatchOutbox } from "./outbox";
 import { checkActivation, nextActivationDelayMin, type ZoneRow } from "./zoneService";
@@ -18,6 +19,7 @@ export async function runScheduled(db: D1Like, deps: { queue: QueueLike<{ jobId:
   await step("expireQuotes", async () => { r.quotesExpired = await expireQuotes(db, nowMs); });
   await step("expireIncomplete", async () => { r.incompleteExpired = await expireIncompleteSubscriptions(db, nowMs); });
   await step("finalizeCanceled", async () => { await finalizeCanceledSubscriptions(db, nowMs); });
+  await step("cpuAddons", async () => { await finalizeCpuAddons(db, nowMs); });
   await step("recoverStuck", async () => { r.stuckRecovered = await recoverStuckJobs(db, nowMs); });
   await step("dispatchOutbox", async () => { if (deps.queue) r.dispatched = await dispatchOutbox(db, deps.queue, nowMs); });
   await step("zones", async () => {

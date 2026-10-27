@@ -146,6 +146,7 @@ export class FleetManager {
 
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
+      if (!step) continue;
       
       await this.serviceMesh.applyTrafficPolicy({
         sourceService: "ingress",

@@ -1,5 +1,5 @@
 ---
-import Layout from '../layouts/Layout.astro';
+import Layout from '@/layouts/Layout.astro';
 ---
 
 <Layout title="로그인 - CloudPress">
@@ -14,13 +14,14 @@ import Layout from '../layouts/Layout.astro';
         <label for="email" class="block text-sm font-medium mb-1">이메일</label>
         <input type="email" id="email" name="email" required class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
       </div>
+
       <div>
         <label for="password" class="block text-sm font-medium mb-1">비밀번호</label>
         <input type="password" id="password" name="password" required class="w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:border-slate-700 focus:ring-2 focus:ring-primary outline-none" />
       </div>
-      
+
       <div id="error-message" class="hidden text-red-600 text-sm py-2"></div>
-      
+
       <button type="submit" class="w-full bg-primary hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors">
         로그인
       </button>
@@ -32,39 +33,6 @@ import Layout from '../layouts/Layout.astro';
   </div>
 
   <script>
-    // 별칭(@) 대신 상대 경로를 사용하거나 클라이언트 로직을 직접 포함하여 번들러 에러 방지
-    const form = document.getElementById('login-form') as HTMLFormElement;
-    const errorMessage = document.getElementById('error-message') as HTMLDivElement;
-
-    if (form) {
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const email = (document.getElementById('email') as HTMLInputElement).value;
-        const password = (document.getElementById('password') as HTMLInputElement).value;
-
-        try {
-          const response = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
-          });
-
-          if (response.ok) {
-            window.location.href = '/dashboard';
-          } else {
-            const data = await response.json();
-            if (errorMessage) {
-              errorMessage.textContent = data.message || '로그인에 실패했습니다.';
-              errorMessage.classList.remove('hidden');
-            }
-          }
-        } catch (err) {
-          if (errorMessage) {
-            errorMessage.textContent = '서버와의 통신 중 오류가 발생했습니다.';
-            errorMessage.classList.remove('hidden');
-          }
-        }
-      });
-    }
+    import '@/scripts/login.ts';
   </script>
 </Layout>

@@ -2,29 +2,27 @@ import { describe, it, expect } from "vitest";
 import { makeDb } from "./helpers/d1";
 import { MockPayPal, PayPalError } from "../src/lib/paypal.client";
 import { MockRegistrar } from "../src/lib/registrar";
-import { MockGabiaClient, GabiaRegistrar } from "../src/lib/registrarRouter";
 import { MockZones } from "../src/lib/zones";
 import { processJob, consumeBatch, recoverStuckJobs, backoffSeconds, RetryableError, PermanentError, HANDLERS, type JobContext, type Handler } from "../src/lib/jobs";
 import { dispatchOutbox } from "../src/lib/outbox";
 import { runScheduled } from "../src/lib/scheduler";
 import { connectDomain } from "../src/lib/zoneService";
-import { createQuoteRouted, markPaid } from "../src/lib/domainOrders";
-import { costSideRate } from "../src/lib/fx";
+import { createQuote, markPaid } from "../src/lib/domainOrders";
 import { encryptSecret, decryptSecret, b64urlEncode } from "../src/lib/crypto";
 
 const KEY = b64urlEncode(crypto.getRandomValues(new Uint8Array(32)));
 const crypt = { encrypt: (p: string, a: string) => encryptSecret(p, KEY, a), decrypt: (t: string, a: string) => decryptSecret(t, KEY, a) };
-const NOW = Date.UTC(2026, 9, 20), FX = 1_400_000_000;
+const NOW = Date.UTC(2026, 9, 20);
 const contact = { email: "o@x.co", phone: "+82.1012345678", postal_info: { name: "홍", address: { street: "s", city: "c", state: "s", postal_code: "1", country_code: "KR" } } };
 
 function world() {
   const { db, raw } = makeDb();
   raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h')");
-  const cf = new MockRegistrar(), gc = new MockGabiaClient(), gabia = new GabiaRegistrar(gc), paypal = new MockPayPal(), zones = new MockZones();
-  const base = { db, paypal, portFor: (p: string) => (p === "gabia" ? gabia : cf), nsPortFor: () => gabia, zones, crypto: crypt, provisioner: null } as const;
+  const cf = new MockRegistrar(), paypal = new MockPayPal(), zones = new MockZones();
+  const base = { db, paypal, portFor: () => cf, nsPortFor: () => ({ setNameservers: async () => { throw new Error("nameserver_delegation_not_supported"); } }), zones, crypto: crypt, provisioner: null } as const;
   const ctx = (nowMs = NOW, over: Partial<JobContext> = {}): JobContext => ({ ...base, nowMs, ...over });
   const addJob = (id: string, kind: string, payload = "{}", extra = "") => raw.exec(`INSERT INTO deployment_jobs(id,kind,idempotency_key,payload_json,state${extra ? "," + extra.split("=")[0] : ""}) VALUES('${id}','${kind}','k_${id}','${payload}','queued'${extra ? "," + extra.split("=")[1] : ""})`);
-  return { db, raw, cf, gc, gabia, paypal, zones, ctx, addJob };
+  return { db, raw, cf, paypal, zones, ctx, addJob };
 }
 const job = (raw: any, id: string) => raw.prepare("select state, attempts, last_error e, next_run_at n from deployment_jobs where id=?").get(id) as any;
 
@@ -109,9 +107,8 @@ describe("작업 처리기", () => {
 });
 
 describe("도메인 작업 종단 간", () => {
-  async function paidOrder(w: ReturnType<typeof world>, hostname: string, kr = false) {
-    if (kr) w.cf.cfg.unavailable = [hostname];
-    const q = await createQuoteRouted(w.db, { cloudflare: w.cf, gabia: w.gabia }, crypt, { customerId: "u1", hostname, contact, nowMs: NOW, currency: "KRW", rate: { smoothedRateMicro: FX, costRateMicro: costSideRate(FX) } });
+  async function paidOrder(w: ReturnType<typeof world>, hostname: string) {
+    const q = await createQuote(w.db, w.cf, crypt, { customerId: "u1", hostname, contact, nowMs: NOW });
     await markPaid(w.db, q.orderId, `pi_${hostname}`, NOW);
     w.raw.exec(`INSERT INTO deployment_jobs(id,kind,idempotency_key,payload_json,state) VALUES('reg','register_domain','register:${q.orderId}','{"orderId":"${q.orderId}"}','queued')`);
     return q;
@@ -122,18 +119,11 @@ describe("도메인 작업 종단 간", () => {
     expect(w.raw.prepare("select status s from domain_orders").get()).toMatchObject({ s: "registered" });
     expect(w.raw.prepare("select origin o, order_id oid from dns_zones").get()).toMatchObject({ o: "registered", oid: q.orderId });
   });
-  it(".kr: 가비아 등록 → 영역 생성 → 가비아 NS 를 Cloudflare NS 로 위임", async () => {
-    const w = world(); await paidOrder(w, "shop.kr", true);
+  it("Cloudflare 로 등록한 도메인은 네임서버 위임이 필요 없다(위임 호출 없음)", async () => {
+    const w = world(); await paidOrder(w, "direct.com");
     expect(await processJob(w.ctx(), "reg")).toBe("succeeded");
-    expect(w.gc.nameservers.get("shop.kr")![0]).toContain("cloudflare.com");
-    expect(w.raw.prepare("select ns_delegated_at t from domain_orders").get()).toMatchObject({ t: expect.any(String) });
-  });
-  it("위임 실패는 작업이 재시도되고, 재시도 때 등록을 다시 호출하지 않음", async () => {
-    const w = world(); await paidOrder(w, "retry.kr", true); w.gc.cfg.failNs = true;
-    expect(await processJob(w.ctx(), "reg")).toBe("retrying");
-    w.gc.cfg.failNs = false;
-    expect(await processJob(w.ctx(NOW + 61_000), "reg")).toBe("succeeded");
-    expect(w.gc.calls.filter((c) => c.startsWith("register:"))).toHaveLength(1);
+    expect(w.raw.prepare("select ns_delegated_at t from domain_orders").get()).toMatchObject({ t: null });
+    expect(w.cf.calls.filter((c: string) => c.startsWith("register:"))).toEqual(["register:direct.com"]);
   });
   it("등록 진행 중이면 재시도로 폴링, 완료되면 마무리", async () => {
     const w = world(); await paidOrder(w, "slow.com"); w.cf.cfg.registerBehavior = "in_progress";

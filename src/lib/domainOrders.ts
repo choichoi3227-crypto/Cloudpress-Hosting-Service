@@ -2,9 +2,6 @@ import { type D1Like, newId, nowIso } from "./db";
 import { normalizeHostname, isApexDomain } from "./domainNames";
 import { priceFor, driftAcceptable, SEED_DOMAIN_PRICING, type DomainPricingConfig } from "./domainPricing";
 import type { RegistrarPort, RegistrantContact, RegistrationOutcome, NameserverPort } from "./registrar";
-import { routeDomain, SEED_ROUTER_CONFIG, type PortMap, type RouterConfig } from "./registrarRouter";
-import { bandFromCostWon, SEED_KRW_PRICE_CONFIG, type KrwPriceConfig } from "./currencyPricing";
-import { wonToUsdMicro } from "./fx";
 import type { ZonesPort } from "./zones";
 import { ServiceError } from "./zoneService";
 import { audit } from "./auth";
@@ -39,10 +36,10 @@ export async function createQuote(db: D1Like, registrar: RegistrarPort, crypto: 
   const price = priceFor(chk.registrationCostMicro, cfg);
   const renewalPrice = priceFor(chk.renewalCostMicro, cfg);
   const expires = nowIso(p.nowMs + cfg.quoteTtlMinutes * 60_000);
-  await db.prepare("INSERT INTO domain_orders(id,customer_id,hostname,registrar_cost_micro,renewal_cost_micro,price_micro,renewal_price_micro,quote_expires_at,registrant_enc,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
-    .bind(id, p.customerId, hostname, chk.registrationCostMicro, chk.renewalCostMicro, price, renewalPrice, expires, await crypto.encrypt(JSON.stringify(p.contact), `domain_order:${id}`), nowIso(p.nowMs), nowIso(p.nowMs)).run();
+  await db.prepare("INSERT INTO domain_orders(id,customer_id,hostname,registrar_cost_micro,renewal_cost_micro,price_micro,renewal_price_micro,quote_expires_at,registrant_enc,created_at,updated_at,registrar_provider,charge_currency,charge_amount,renewal_charge_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,'cloudflare','USD',?,?)")
+    .bind(id, p.customerId, hostname, chk.registrationCostMicro, chk.renewalCostMicro, price, renewalPrice, expires, await crypto.encrypt(JSON.stringify(p.contact), `domain_order:${id}`), nowIso(p.nowMs), nowIso(p.nowMs), Math.round(price / 10_000), Math.round(renewalPrice / 10_000)).run();
   await audit(db, { actorId: p.customerId, action: "domain.quote", targetType: "domain_order", targetId: id, detail: { hostname, price } }, p.nowMs);
-  return { orderId: id, hostname, priceMicro: price, renewalPriceMicro: renewalPrice, quoteExpiresAt: expires, nonRefundableNotice: "도메인 등록이 완료되면 환불되지 않습니다." };
+  return { orderId: id, hostname, currency: "USD" as const, chargeAmount: Math.round(price / 10_000), renewalChargeAmount: Math.round(renewalPrice / 10_000), priceMicro: price, renewalPriceMicro: renewalPrice, quoteExpiresAt: expires, nonRefundableNotice: "도메인 등록이 완료되면 환불되지 않습니다." };
 }
 
 export async function expireQuotes(db: D1Like, nowMs: number): Promise<number> {
@@ -96,7 +93,7 @@ export async function runRegistration(db: D1Like, ports: PortSource, crypto: Cry
   const registrar = portOf(ports, o.registrar_provider);
   const [chk] = await registrar.check([o.hostname]);
   // 원화 공급가(가비아)는 견적 시점 환율로 환산해 같은 기준으로 비교한다(환율 잡음이 원가 변동으로 오판되지 않게).
-  const currentCost = chk?.registrationCostMicro ?? (chk?.registrationCostWon !== undefined && o.fx_rate_micro ? wonToUsdMicro(chk.registrationCostWon, o.fx_rate_micro) : undefined);
+  const currentCost = chk?.registrationCostMicro;
   if (!chk?.registrable || currentCost === undefined) { await db.batch(toRefund(db, o.id, ["registering"], `not_registrable:${chk?.reason ?? "unknown"}`, nowMs)); return "refund_due"; }
   if (!driftAcceptable(o.registrar_cost_micro, currentCost, cfg)) { await db.batch(toRefund(db, o.id, ["registering"], "price_changed", nowMs)); return "refund_due"; }
   if (!o.registrant_enc) { await db.prepare("UPDATE domain_orders SET status='needs_review', failure_reason='missing_registrant', updated_at=? WHERE id=? AND status='registering'").bind(nowIso(nowMs), o.id).run(); return "needs_review"; }
@@ -165,44 +162,4 @@ export async function delegateNameservers(db: D1Like, nsPort: NameserverPort, or
   await nsPort.setNameservers(o.hostname, ns);
   await db.prepare("UPDATE domain_orders SET ns_delegated_at=?, updated_at=? WHERE id=?").bind(nowIso(nowMs), nowIso(nowMs), orderId).run();
   return { delegated: true, nameServers: ns };
-}
-
-export interface RoutedQuoteInput {
-  customerId: string; hostname: string; contact: RegistrantContact; nowMs: number;
-  currency: "KRW" | "USD";
-  rate: { smoothedRateMicro: number; costRateMicro: number };
-  krwCfg?: KrwPriceConfig; usdCfg?: DomainPricingConfig; routerCfg?: RouterConfig;
-}
-
-/**
- * 다중 등록기관·다중 통화 견적: 등록기관 선택 → 판매가 산정(KRW: 환율·하한/상한 밴드, USD: 원가+수수료) → 주문에 환율·통화 고정.
- * 하한이 상한을 넘으면(팔수록 손해) 견적을 내지 않는다.
- */
-export async function createQuoteRouted(db: D1Like, ports: PortMap, crypto: Crypto, p: RoutedQuoteInput) {
-  const usdCfg = p.usdCfg ?? SEED_DOMAIN_PRICING, krwCfg = p.krwCfg ?? SEED_KRW_PRICE_CONFIG;
-  const hostname = normalizeHostname(p.hostname);
-  if (!hostname || !isApexDomain(hostname)) throw new ServiceError("invalid_hostname", "등록할 수 있는 루트 도메인(example.com)만 가능");
-  if (!validContact(p.contact)) throw new ServiceError("invalid_contact", "등록자 정보를 정확히 입력해야 함");
-  const taken = await db.prepare("SELECT 1 AS x FROM domain_orders WHERE hostname = ? AND status IN ('paid','registering','registered','needs_review')").bind(hostname).first();
-  if (taken) throw new ServiceError("unavailable", "이미 주문이 진행 중이거나 등록된 도메인");
-  const route = await routeDomain(ports, hostname, p.rate, p.routerCfg ?? SEED_ROUTER_CONFIG).catch((e) => { throw new ServiceError("unavailable", e instanceof Error ? e.message : "조회 실패"); });
-  const b = route.best;
-  let chargeAmount: number, renewalAmount: number, priceUsdEq: number;
-  if (p.currency === "KRW") {
-    const reg = bandFromCostWon(b.regWon, krwCfg), ren = bandFromCostWon(b.renWon, krwCfg);
-    if (!reg.sellable || !ren.sellable) throw new ServiceError("unsellable", "현재 원가·환율에서는 시장 상한가 안에서 마진을 확보할 수 없어 판매를 중지함");
-    chargeAmount = reg.targetWon; renewalAmount = ren.targetWon;
-    priceUsdEq = wonToUsdMicro(chargeAmount, p.rate.smoothedRateMicro);
-  } else {
-    chargeAmount = Math.round(priceFor(b.regUsdMicro, usdCfg) / 10_000); // 센트
-    renewalAmount = Math.round(priceFor(b.renUsdMicro, usdCfg) / 10_000);
-    priceUsdEq = chargeAmount * 10_000;
-  }
-  const id = newId("dor");
-  const expires = nowIso(p.nowMs + usdCfg.quoteTtlMinutes * 60_000);
-  await db.prepare(`INSERT INTO domain_orders(id,customer_id,hostname,registrar_cost_micro,renewal_cost_micro,price_micro,renewal_price_micro,quote_expires_at,registrant_enc,created_at,updated_at,registrar_provider,charge_currency,charge_amount,renewal_charge_amount,fx_rate_micro) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(id, p.customerId, hostname, b.regUsdMicro, b.renUsdMicro, Math.max(1, priceUsdEq), Math.max(1, p.currency === "KRW" ? wonToUsdMicro(renewalAmount, p.rate.smoothedRateMicro) : renewalAmount * 10_000), expires,
-      await crypto.encrypt(JSON.stringify(p.contact), `domain_order:${id}`), nowIso(p.nowMs), nowIso(p.nowMs), b.provider, p.currency, chargeAmount, renewalAmount, p.rate.smoothedRateMicro).run();
-  await audit(db, { actorId: p.customerId, action: "domain.quote", targetType: "domain_order", targetId: id, detail: { hostname, provider: b.provider, currency: p.currency, chargeAmount } }, p.nowMs);
-  return { orderId: id, hostname, provider: b.provider, currency: p.currency, chargeAmount, renewalChargeAmount: renewalAmount, quoteExpiresAt: expires, reasons: route.reasons, nonRefundableNotice: "도메인 등록이 완료되면 환불되지 않습니다." };
 }

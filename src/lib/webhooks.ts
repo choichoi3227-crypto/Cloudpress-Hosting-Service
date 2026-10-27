@@ -2,6 +2,7 @@ import { type D1Like, newId, nowIso } from "./db";
 import { assertTransition, SUBSCRIPTION_TRANSITIONS, type SubscriptionState } from "./states";
 import { valueToCents, type PayPalPort, type WebhookHeaders } from "./paypal.client";
 import { markPaid } from "./domainOrders";
+import { enqueueResize } from "./cpuAddons";
 
 type Sub = { id: string; customer_id: string; status: SubscriptionState; paypal_subscription_id: string | null; current_period_end: string | null };
 
@@ -87,14 +88,51 @@ async function onSubscriptionActivated(db: D1Like, ev: PayPalEvent, nowMs: numbe
   const r = ev.resource;
   const ourId: string | undefined = r.custom_id;
   if (!ourId || typeof r.id !== "string") return false;
+  if (ourId.startsWith("cpu:")) return (await findAddon(db, r.id, ourId)) !== null; // 추가 CPU 는 구매 시점에 PayPal 구독 ID 를 이미 저장한다
   const res = await db.prepare("UPDATE subscriptions SET paypal_subscription_id = ?, updated_at = ? WHERE id = ? AND (paypal_subscription_id IS NULL OR paypal_subscription_id = ?)").bind(r.id, nowIso(nowMs), ourId, r.id).run();
   if (res.meta.changes === 0) throw new Error(`cannot link paypal subscription to ${ourId}`);
+  return true;
+}
+
+type Addon = { id: string; subscription_id: string; container_id: string; purchase_status: string; monthly_micro: number };
+/** PayPal 구독 ID 또는 custom 값("cpu:<id>")으로 추가 CPU 구매를 찾는다. */
+async function findAddon(db: D1Like, paypalSubId: string | null | undefined, custom: string | null | undefined): Promise<Addon | null> {
+  const cols = "id,subscription_id,container_id,purchase_status,monthly_micro";
+  if (paypalSubId) { const a = await db.prepare(`SELECT ${cols} FROM cpu_addons WHERE paypal_subscription_id = ?`).bind(paypalSubId).first<Addon>(); if (a) return a; }
+  if (typeof custom === "string" && custom.startsWith("cpu:")) return db.prepare(`SELECT ${cols} FROM cpu_addons WHERE id = ?`).bind(custom.slice(4)).first<Addon>();
+  return null;
+}
+
+/** 추가 CPU 결제 확정: 구매 상태만 paid 로 바꾸고 적용(증설)은 작업 큐로 넘긴다. 갱신 결제는 기간만 연장한다. */
+async function onAddonSale(db: D1Like, addon: Addon, sale: Record<string, any>, nowMs: number): Promise<boolean> {
+  const cents = valueToCents(sale.amount?.total);
+  const micro = cents * MICRO_PER_CENT;
+  const parent = await db.prepare("SELECT customer_id FROM subscriptions WHERE id = ?").bind(addon.subscription_id).first<{ customer_id: string }>();
+  if (!parent) throw new Error(`parent subscription missing for addon ${addon.id}`);
+  const invoiceId = `inv_${sale.id}`;
+  const periodEnd = addMonthUtc(nowMs);
+  const stmts = [
+    db.prepare("INSERT OR IGNORE INTO invoices(id,subscription_id,customer_id,paypal_sale_id,status,subtotal_micro,total_micro,currency,total_minor,period_start,period_end,created_at) VALUES(?,?,?,?,?,?,?,'USD',?,?,?,?)")
+      .bind(invoiceId, addon.subscription_id, parent.customer_id, sale.id, "paid", micro, micro, cents, nowIso(nowMs), nowIso(periodEnd), nowIso(nowMs)),
+    db.prepare("INSERT OR IGNORE INTO payments(id,invoice_id,customer_id,paypal_capture_id,provider,amount_micro,status,paid_at,created_at,currency,amount_minor) VALUES(?,?,?,?,'paypal',?,?,?,?,'USD',?)")
+      .bind(`pay_${sale.id}`, invoiceId, parent.customer_id, sale.id, micro, "succeeded", nowIso(nowMs), nowIso(nowMs), cents),
+    db.prepare("UPDATE cpu_addons SET current_period_end=? WHERE id=?").bind(nowIso(periodEnd), addon.id),
+  ];
+  if (addon.purchase_status === "pending") {
+    // 청구 금액이 구매 시 약속한 가격과 다르면 적용하지 않는다(가격 변조·플랜 불일치 방지).
+    if (micro !== addon.monthly_micro) throw new Error(`addon price mismatch: ${micro} != ${addon.monthly_micro}`);
+    stmts.push(db.prepare("UPDATE cpu_addons SET purchase_status='paid', apply_status='queued' WHERE id=? AND purchase_status='pending'").bind(addon.id));
+    stmts.push(enqueueResize(db, addon.subscription_id, addon.container_id, `buy:${addon.id}`, nowMs));
+  }
+  await db.batch(stmts);
   return true;
 }
 
 async function onSaleCompleted(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
   const sale = ev.resource;
   if (String(sale.state).toLowerCase() !== "completed") return false;
+  const addon = await findAddon(db, sale.billing_agreement_id, sale.custom ?? sale.custom_id);
+  if (addon) return onAddonSale(db, addon, sale, nowMs);
   const sub = await resolveSub(db, sale.billing_agreement_id, sale.custom ?? sale.custom_id);
   if (!sub) throw new Error(`subscription not linked yet: ${sale.billing_agreement_id}`); // 연결 전 도착 → 재시도
   if (String(sale.amount?.currency).toUpperCase() !== "USD") throw new Error(`unsupported currency: ${sale.amount?.currency}`);
@@ -122,6 +160,12 @@ async function onSaleCompleted(db: D1Like, ev: PayPalEvent, nowMs: number): Prom
 }
 
 async function onPaymentFailed(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
+  const addon = await findAddon(db, ev.resource.id, ev.resource.custom_id);
+  if (addon) {
+    const owner = await db.prepare("SELECT customer_id FROM subscriptions WHERE id = ?").bind(addon.subscription_id).first<{ customer_id: string }>();
+    if (owner) await db.prepare("INSERT INTO notifications(id,user_id,severity,title,body,created_at) VALUES(?,?,?,?,?,?)").bind(newId("ntf"), owner.customer_id, "warning", "추가 CPU 결제 실패", "추가 CPU 결제에 실패했습니다. PayPal 결제 수단을 확인해 주세요.", nowIso(nowMs)).run();
+    return true;
+  }
   const sub = await resolveSub(db, ev.resource.id, ev.resource.custom_id);
   if (!sub) throw new Error("subscription not linked yet");
   const stmts = [db.prepare("INSERT INTO notifications(id,user_id,severity,title,body,created_at) VALUES(?,?,?,?,?,?)")
@@ -135,6 +179,7 @@ async function onPaymentFailed(db: D1Like, ev: PayPalEvent, nowMs: number): Prom
 }
 
 async function onSubscriptionSuspended(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
+  if (await findAddon(db, ev.resource.id, ev.resource.custom_id)) return true; // 추가 CPU 는 정지만으로 사양을 줄이지 않는다(해지/기간 종료 시 축소)
   const sub = await resolveSub(db, ev.resource.id, ev.resource.custom_id);
   if (!sub) throw new Error("subscription not linked yet");
   if (sub.status !== "active" && sub.status !== "past_due") return true;
@@ -148,6 +193,12 @@ async function onSubscriptionSuspended(db: D1Like, ev: PayPalEvent, nowMs: numbe
  * 이미 이용 기간이 남아 있으면 기간 종료까지 'canceling' 으로 두고(스케줄러가 확정), 남은 기간이 없으면 바로 canceled.
  */
 async function onSubscriptionEnded(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
+  const addon = await findAddon(db, ev.resource.id, ev.resource.custom_id);
+  if (addon) {
+    if (addon.purchase_status === "pending") await db.prepare("UPDATE cpu_addons SET purchase_status='cancelled' WHERE id=?").bind(addon.id).run();
+    else if (addon.purchase_status === "paid") await db.prepare("UPDATE cpu_addons SET cancel_at_period_end=1 WHERE id=?").bind(addon.id).run(); // 이미 결제한 기간은 유지, 기간 종료 시 축소
+    return true;
+  }
   const sub = await resolveSub(db, ev.resource.id, ev.resource.custom_id);
   if (!sub) throw new Error("subscription not linked yet");
   if (sub.status === "canceled" || sub.status === "refunded" || sub.status === "canceling") return true;

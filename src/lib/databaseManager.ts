@@ -169,7 +169,8 @@ export class DatabaseManager {
       throw new Error("No PITR snapshot available for target timestamp");
     }
 
-    const snapshot = snapshots.results[0];
+    const snapshot = snapshots.results[0] as { r2_key: string } | undefined;
+    if (!snapshot) throw new Error("No PITR snapshot available for target timestamp");
     
     const replicaId = newId("pitr_restore");
     await this.cfClient.startContainer({

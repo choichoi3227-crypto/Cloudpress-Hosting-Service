@@ -84,7 +84,7 @@ const { id } = Astro.params;
             <h2 class="text-lg font-semibold">위험 구역</h2>
           </div>
           <div class="p-6 space-y-4 text-sm text-gray-500 dark:text-gray-400">
-            <p>서비스를 취소하면 즉시 중단되며 데이터는 30일 후 영구 삭제됩니다.</p>
+            <p>서비스를 취소하면 다음 결제부터 청구가 중단되고, 이미 결제한 이용 기간이 끝나면 서비스가 중지됩니다.</p>
             <p class="text-red-600 dark:text-red-400 font-medium">이 작업은 되돌릴 수 없습니다.</p>
           </div>
         </div>
@@ -92,8 +92,31 @@ const { id } = Astro.params;
     </div>
   </div>
 
+  <section id="cpu-card" class="hidden max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="p-6 border-b border-gray-200 dark:border-slate-800">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">추가 CPU</h2>
+        <p id="cpu-current" class="text-sm text-gray-500 dark:text-gray-400 mt-1"></p>
+      </div>
+      <div class="p-6 space-y-4">
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="text-sm text-gray-700 dark:text-gray-300">추가 vCPU
+            <select id="cpu-tier" class="ml-2 px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800"></select>
+          </label>
+          <button id="cpu-quote-btn" type="button" class="bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 dark:hover:bg-slate-700 px-4 py-2 rounded-lg text-sm font-medium">견적 확인</button>
+          <button id="cpu-buy-btn" type="button" class="hidden bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium">PayPal로 구매</button>
+        </div>
+        <p id="cpu-quote" class="text-sm text-gray-700 dark:text-gray-300"></p>
+        <p id="cpu-error" class="hidden text-sm text-red-600"></p>
+        <div id="cpu-list" class="divide-y divide-gray-100 dark:divide-slate-800"></div>
+      </div>
+    </div>
+  </section>
+
   <script>
     import { initServiceDetail } from '@/scripts/service-detail.ts';
+    import { initCpuAddons } from '@/scripts/cpu-addons.ts';
     initServiceDetail();
+    initCpuAddons();
   </script>
 </Layout>

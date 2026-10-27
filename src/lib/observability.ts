@@ -127,6 +127,7 @@ export class ObservabilityManager {
       if (values.length === 0) continue;
 
       const currentValue = values[0];
+      if (currentValue === undefined) continue;
       const shouldFire = this.evaluateCondition(currentValue, condition.operator, condition.threshold);
 
       if (shouldFire) {

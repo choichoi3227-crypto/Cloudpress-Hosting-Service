@@ -4,7 +4,7 @@ import type { DatabaseSync as DB } from "node:sqlite";
 import type { D1Like, D1Stmt } from "../../src/lib/db";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (p: string) => DB };
-export const MIGRATIONS = ["0001_init.sql", "0002_engines_rail_optimizer.sql", "0003_storage_recycling.sql", "0004_domains_zones.sql", "0005_fx_providers.sql", "0006_stripe_currency_jobs.sql", "0010_paypal.sql"];
+export const MIGRATIONS = ["0001_init.sql", "0002_engines_rail_optimizer.sql", "0003_storage_recycling.sql", "0004_domains_zones.sql", "0005_fx_providers.sql", "0006_stripe_currency_jobs.sql", "0010_paypal.sql", "0011_cpu_addons_paypal.sql"];
 export const readMigration = (f: string) => readFileSync(new URL(`../../migrations/${f}`, import.meta.url), "utf8");
 
 class Stmt implements D1Stmt {

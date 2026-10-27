@@ -238,6 +238,7 @@ export class ServiceDiscoveryResolver {
     }
     const serviceName = parts[0];
     const namespace = parts[1];
+    if (!serviceName || !namespace) return [];
     return this.mesh.discoverServices(serviceName, namespace);
   }
 
