@@ -15,10 +15,7 @@ import { ForbiddenError, rotateCsrf } from "./lib/auth";
 import { routeApi, listPlans } from "./api";
 import { runGateway } from "./lib/cas";
 import { runTick } from "./lib/workforce";
-<<<<<<< ours
-=======
 import { bindReferral } from "./lib/affiliateProgram";
->>>>>>> theirs
 
 export interface Env {
   DB: D1Like;
