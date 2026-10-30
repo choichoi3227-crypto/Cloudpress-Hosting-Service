@@ -1,0 +1,31 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="제휴 프로그램">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">제휴 프로그램</h1>
+      <p id="aff-policy" class="text-sm text-gray-500 mt-1"></p>
+    </div>
+    <section id="aff-apply" class="hidden bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 p-6 space-y-3">
+      <h2 class="font-semibold">제휴자 신청</h2>
+      <p class="text-sm text-gray-500">수수료를 받을 PayPal 이메일을 입력하세요. 운영자 승인 후 추천 링크가 발급됩니다. 본인·같은 사람의 다른 계정을 추천하면 수수료가 지급되지 않습니다.</p>
+      <div class="flex flex-wrap gap-2"><input id="aff-email" type="email" placeholder="PayPal 이메일" class="flex-1 min-w-60 px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800" /><button id="aff-apply-btn" class="bg-primary text-white px-4 py-2 rounded-lg font-medium">신청</button></div>
+      <p id="aff-error" class="hidden text-sm text-red-600"></p>
+    </section>
+    <section id="aff-main" class="hidden space-y-6">
+      <div id="aff-status" class="text-sm"></div>
+      <div id="aff-link-box" class="hidden bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 p-6">
+        <div class="text-sm text-gray-500 mb-1">내 추천 링크</div>
+        <div class="flex gap-2"><input id="aff-link" readonly class="flex-1 px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-gray-50 dark:bg-slate-800 text-sm" /><button id="aff-copy" class="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 text-sm">복사</button></div>
+      </div>
+      <div id="aff-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+      <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800"><div class="p-4 border-b border-gray-200 dark:border-slate-800 font-semibold">최근 수수료</div><div id="aff-commissions" class="divide-y divide-gray-100 dark:divide-slate-800 text-sm"></div></section>
+      <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800"><div class="p-4 border-b border-gray-200 dark:border-slate-800 font-semibold">지급 내역</div><div id="aff-payouts" class="divide-y divide-gray-100 dark:divide-slate-800 text-sm"></div></section>
+    </section>
+  </div>
+  <script>
+    import { initAffiliate } from '@/scripts/affiliate.ts';
+    initAffiliate();
+  </script>
+</Layout>

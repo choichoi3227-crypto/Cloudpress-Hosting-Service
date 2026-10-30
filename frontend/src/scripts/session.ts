@@ -1,6 +1,12 @@
 // 모든 페이지 공통: 세션 확인, CSRF 토큰 발급, 내비게이션 갱신, 보호 페이지 접근 제어.
 const PUBLIC_PATHS = new Set(['/', '/login', '/register']);
 
+// 제휴 추천 링크(?ref=CODE)를 60일간 보관했다가 가입 시 서버로 전달한다(서버가 코드·자기추천을 검증한다).
+try {
+  const code = new URLSearchParams(window.location.search).get('ref');
+  if (code && /^[A-Za-z0-9]{6,12}$/.test(code)) localStorage.setItem('cp_ref', JSON.stringify({ code: code.toUpperCase(), ts: Date.now() }));
+} catch { /* 저장소를 못 쓰는 환경은 무시 */ }
+
 declare global { interface Window { csrfToken?: string; cpUser?: { id: string; email: string; role: string } } }
 
 function normPath(p: string): string { return p.length > 1 ? p.replace(/\/+$/, '') : p; }

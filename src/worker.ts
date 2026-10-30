@@ -15,6 +15,10 @@ import { ForbiddenError, rotateCsrf } from "./lib/auth";
 import { routeApi, listPlans } from "./api";
 import { runGateway } from "./lib/cas";
 import { runTick } from "./lib/workforce";
+<<<<<<< ours
+=======
+import { bindReferral } from "./lib/affiliateProgram";
+>>>>>>> theirs
 
 export interface Env {
   DB: D1Like;
@@ -144,12 +148,14 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
 
       try {
         const r = await registerUser(env.DB, b.email, b.password, now);
+        // 추천 코드 연결(서버에서 검증). 실패해도 가입은 막지 않는다.
+        if (r.ok && typeof b.ref === "string") { try { await bindReferral(env.DB, { id: r.userId, email: b.email.trim().toLowerCase() }, b.ref, now); } catch (e) { console.error("[referral]", e instanceof Error ? e.message : e); } }
         return r.ok 
           ? json({ ok: true }, 201) 
           : json({ error: r.code, message: r.message }, r.code === "email_taken" ? 409 : 400);
       } catch (regErr: any) {
         console.error("[Register Error Detail]", regErr?.message, regErr?.stack);
-        return json({ error: "internal_error", details: regErr?.message }, 500);
+        return json({ error: "internal_error" }, 500); // 내부 오류 상세는 응답에 싣지 않는다(로그에만 기록)
       }
     }
 

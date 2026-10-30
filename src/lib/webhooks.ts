@@ -4,6 +4,10 @@ import { valueToCents, type PayPalPort, type WebhookHeaders } from "./paypal.cli
 import { markPaid } from "./domainOrders";
 import { enqueueResize } from "./cpuAddons";
 import { creditTopup } from "./cas";
+<<<<<<< ours
+=======
+import { accrueCommission } from "./affiliateProgram";
+>>>>>>> theirs
 
 type Sub = { id: string; customer_id: string; status: SubscriptionState; paypal_subscription_id: string | null; current_period_end: string | null };
 
@@ -95,6 +99,11 @@ async function onSubscriptionActivated(db: D1Like, ev: PayPalEvent, nowMs: numbe
   return true;
 }
 
+/** 제휴 수수료 적립 실패가 결제 처리를 막지 않게 한다(멱등이라 정산 단계 이전 재시도 가능). */
+async function accrueSafe(db: D1Like, paymentId: string, nowMs: number): Promise<void> {
+  try { await accrueCommission(db, paymentId, nowMs); } catch (e) { console.error("[affiliate accrue]", e instanceof Error ? e.message : e); }
+}
+
 type Addon = { id: string; subscription_id: string; container_id: string; purchase_status: string; monthly_micro: number };
 /** PayPal 구독 ID 또는 custom 값("cpu:<id>")으로 추가 CPU 구매를 찾는다. */
 async function findAddon(db: D1Like, paypalSubId: string | null | undefined, custom: string | null | undefined): Promise<Addon | null> {
@@ -126,6 +135,7 @@ async function onAddonSale(db: D1Like, addon: Addon, sale: Record<string, any>, 
     stmts.push(enqueueResize(db, addon.subscription_id, addon.container_id, `buy:${addon.id}`, nowMs));
   }
   await db.batch(stmts);
+  await accrueSafe(db, `pay_${sale.id}`, nowMs);
   return true;
 }
 
@@ -157,6 +167,7 @@ async function onSaleCompleted(db: D1Like, ev: PayPalEvent, nowMs: number): Prom
     stmts.push(db.prepare("UPDATE subscriptions SET current_period_start=?, current_period_end=?, last_invoice_id=?, updated_at=? WHERE id=?").bind(nowIso(periodStart), nowIso(periodEnd), invoiceId, nowIso(nowMs), sub.id));
   }
   await db.batch(stmts);
+  await accrueSafe(db, `pay_${sale.id}`, nowMs);
   return true;
 }
 

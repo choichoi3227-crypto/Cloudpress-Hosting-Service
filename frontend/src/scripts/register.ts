@@ -91,7 +91,7 @@ export function initRegister(): void {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ email: emailInput.value, password: passwordInput.value })
+        body: JSON.stringify({ email: emailInput.value, password: passwordInput.value, ref: storedRef() })
       });
 
       const data = await res.json() as { message?: string; error?: string };
@@ -125,4 +125,11 @@ if (typeof window !== 'undefined') {
   } else {
     initRegister();
   }
+}
+
+function storedRef(): string | undefined {
+  try {
+    const v = JSON.parse(localStorage.getItem('cp_ref') ?? 'null') as { code?: string; ts?: number } | null;
+    return v?.code && v.ts && Date.now() - v.ts < 60 * 86_400_000 ? v.code : undefined;
+  } catch { return undefined; }
 }

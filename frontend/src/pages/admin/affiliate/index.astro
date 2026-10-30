@@ -1,0 +1,20 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+---
+<Layout title="제휴 관리 (운영자)">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div><h1 class="text-2xl font-bold">제휴 관리</h1><p class="text-sm text-gray-500">제휴자 승인, 의심 추천 검토, 월 정산 승인·송금 기록. 송금은 PayPal 에서 직접 하고 참조번호를 기록합니다.</p></div>
+      <button id="aff-settle" class="px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 hover:bg-gray-200 dark:bg-slate-800">지금 정산 실행(유지·환불 반영)</button>
+    </div>
+    <p id="aff-admin-msg" class="hidden text-sm text-blue-700"></p>
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800"><div class="p-4 border-b border-gray-200 dark:border-slate-800 font-semibold">정책</div><div id="aff-policy-view" class="p-4 text-sm flex flex-wrap gap-4 items-end"></div></section>
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800"><div class="p-4 border-b border-gray-200 dark:border-slate-800 font-semibold">지급 요청</div><div id="aff-payouts" class="divide-y divide-gray-100 dark:divide-slate-800 text-sm"></div></section>
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800"><div class="p-4 border-b border-gray-200 dark:border-slate-800 font-semibold">제휴자</div><div id="aff-list" class="divide-y divide-gray-100 dark:divide-slate-800 text-sm"></div></section>
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800"><div class="p-4 border-b border-gray-200 dark:border-slate-800 font-semibold">의심 추천 (수수료 보류)</div><div id="aff-flagged" class="divide-y divide-gray-100 dark:divide-slate-800 text-sm"></div></section>
+  </div>
+  <script>
+    import { initAdminAffiliate } from '@/scripts/admin-affiliate.ts';
+    initAdminAffiliate();
+  </script>
+</Layout>
