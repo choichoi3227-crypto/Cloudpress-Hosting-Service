@@ -5,10 +5,7 @@ import type { Env } from "./worker";
 import { buildRuntime } from "./runtime";
 import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
 import { applyDomainCapture, applyAiTopup } from "./lib/webhooks";
-<<<<<<< ours
-=======
 import { applyAffiliate, affiliateSummary, setAffiliateStatus, adminAffiliateOverview, approvePayout, markPayoutPaid, releasePayout, clearReferralFlag, saveAffiliatePolicy, settleAffiliates } from "./lib/affiliateProgram";
->>>>>>> theirs
 import { seedWorkforce, runTick, companyOverview, createTask, decideApproval, completeHumanTask, setSetting, loadSettings } from "./lib/workforce";
 import { issueKey, revokeKey, rotateKey, creditBalance, syncModels, adminSetModel, currentPrice, MIN_TOPUP_MICRO, MAX_TOPUP_MICRO, COST_MICRO_PER_NEURON, type Tier } from "./lib/cas";
 import { quoteCpuAddon, purchaseCpuAddon, loadCpuPolicy, saveCpuPolicy } from "./lib/cpuAddons";
