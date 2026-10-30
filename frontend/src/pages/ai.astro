@@ -1,0 +1,52 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+<Layout title="AI 서비스 (CAS)">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">AI 서비스 (CAS)</h1>
+      <p class="text-sm text-gray-500 mt-1">모델을 구독하고 API 키로 호출합니다. 사용량 요금은 선불 크레딧에서 차감되며, 크레딧이 없으면 요청이 거절됩니다(미수금 없음). Neurons는 공식 단가로 환산한 추정치입니다.</p>
+      <p id="ai-flash" class="hidden mt-2 text-sm text-blue-700"></p>
+    </div>
+
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 p-6">
+      <h2 class="font-semibold mb-3">크레딧</h2>
+      <p class="text-2xl font-bold text-primary" id="ai-balance">-</p>
+      <div class="flex flex-wrap items-end gap-3 mt-4">
+        <label class="text-sm">충전 금액(USD)
+          <input id="topup-amount" type="number" min="5" max="500" step="0.01" value="10" class="ml-2 w-28 px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800" />
+        </label>
+        <button id="topup-btn" type="button" class="bg-primary hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium">PayPal로 충전</button>
+      </div>
+      <p id="topup-error" class="hidden text-sm text-red-600 mt-2"></p>
+    </section>
+
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="p-6 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">모델</h2></div>
+      <div id="ai-models" class="divide-y divide-gray-100 dark:divide-slate-800"></div>
+    </section>
+
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="p-6 border-b border-gray-200 dark:border-slate-800 flex flex-wrap items-end justify-between gap-3">
+        <h2 class="font-semibold">API 키</h2>
+        <div class="flex gap-2">
+          <input id="key-name" placeholder="키 이름" maxlength="60" class="px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-sm" />
+          <button id="key-create" type="button" class="bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium">키 발급</button>
+        </div>
+      </div>
+      <div id="key-new" class="hidden m-6 p-4 rounded-lg bg-amber-50 text-amber-900 text-sm break-all"></div>
+      <p id="key-error" class="hidden text-sm text-red-600 px-6 pt-4"></p>
+      <div id="ai-keys" class="divide-y divide-gray-100 dark:divide-slate-800"></div>
+      <p class="p-6 text-xs text-gray-500">호출 예: <code>POST /v1/ai/run</code> · 헤더 <code>Authorization: Bearer &lt;키&gt;</code> · 본문 <code>&#123;"model":"@cf/...","input":&#123;"prompt":"..."&#125;&#125;</code></p>
+    </section>
+
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="p-6 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">이번 달 사용량</h2></div>
+      <div id="ai-usage" class="p-6 text-sm"></div>
+    </section>
+  </div>
+  <script>
+    import { initAiPage } from '@/scripts/ai.ts';
+    initAiPage();
+  </script>
+</Layout>

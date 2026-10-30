@@ -3,6 +3,7 @@ import { assertTransition, SUBSCRIPTION_TRANSITIONS, type SubscriptionState } fr
 import { valueToCents, type PayPalPort, type WebhookHeaders } from "./paypal.client";
 import { markPaid } from "./domainOrders";
 import { enqueueResize } from "./cpuAddons";
+import { creditTopup } from "./cas";
 
 type Sub = { id: string; customer_id: string; status: SubscriptionState; paypal_subscription_id: string | null; current_period_end: string | null };
 
@@ -232,11 +233,24 @@ export async function applyDomainCapture(db: D1Like, orderId: string, captureId:
   ]);
 }
 
+/** AI 크레딧 충전 캡처 반영(웹훅·리턴 URL 공용, 멱등). 금액·통화가 충전 요청과 다르면 거부한다. */
+export async function applyAiTopup(db: D1Like, topupId: string, captureId: string, currency: string, amountMinor: number, nowMs: number): Promise<void> {
+  const t = await db.prepare("SELECT id, customer_id, amount_micro, status FROM ai_credit_topups WHERE id = ?").bind(topupId).first<{ id: string; customer_id: string; amount_micro: number; status: string }>();
+  if (!t) throw new Error(`ai topup not found: ${topupId}`);
+  if (currency.toUpperCase() !== "USD" || amountMinor * MICRO_PER_CENT !== t.amount_micro) throw new Error(`ai topup mismatch for ${topupId}`);
+  await db.batch([
+    db.prepare("UPDATE ai_credit_topups SET status='paid' WHERE id=? AND status='pending'").bind(t.id),
+    db.prepare("INSERT OR IGNORE INTO payments(id,customer_id,paypal_capture_id,provider,amount_micro,status,paid_at,created_at,currency,amount_minor) VALUES(?,?,?,'paypal',?,?,?,?,'USD',?)").bind(`pay_${captureId}`, t.customer_id, captureId, t.amount_micro, "succeeded", nowIso(nowMs), nowIso(nowMs), amountMinor),
+  ]);
+  await creditTopup(db, t.customer_id, t.amount_micro, `topup:${captureId}`, nowMs);
+}
+
 async function onCaptureCompleted(db: D1Like, ev: PayPalEvent, nowMs: number): Promise<boolean> {
   const c = ev.resource;
   if (String(c.status).toUpperCase() !== "COMPLETED") return false;
   const orderId: string | undefined = c.custom_id;
   if (!orderId) return false;
+  if (orderId.startsWith("ai:")) { await applyAiTopup(db, orderId.slice(3), c.id, c.amount?.currency_code ?? "", valueToCents(c.amount?.value), nowMs); return true; }
   const exists = await db.prepare("SELECT 1 AS x FROM domain_orders WHERE id = ?").bind(orderId).first();
   if (!exists) return false; // 구독 결제 등 도메인 주문이 아닌 캡처
   await applyDomainCapture(db, orderId, c.id, c.amount?.currency_code ?? "", valueToCents(c.amount?.value), nowMs);

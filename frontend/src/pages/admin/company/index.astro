@@ -1,0 +1,78 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+---
+<Layout title="AI 회사 현황 (운영자)">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">AI 회사 현황</h1>
+        <p class="text-sm text-gray-500">AI 직원들은 제안·분석·초안만 만들고, 지출·배포·가격·고객 연락 같은 실제 행동은 아래 <b>승인 대기</b>에서 대표님이 결정합니다.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <span id="wf-pill" class="px-3 py-1 rounded-full text-sm font-medium bg-gray-200 text-gray-700">불러오는 중</span>
+        <button id="wf-toggle" class="px-3 py-2 rounded-lg text-sm font-medium bg-primary text-white"></button>
+        <button id="wf-tick" class="px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 hover:bg-gray-200 dark:bg-slate-800">지금 실행</button>
+        <button id="wf-pause" class="px-3 py-2 rounded-lg text-sm font-medium text-white bg-red-600 hover:bg-red-700"></button>
+      </div>
+    </div>
+    <p id="wf-msg" class="hidden text-sm text-blue-700 dark:text-blue-300"></p>
+
+    <div id="kpis" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+    <div id="goals" class="grid md:grid-cols-2 gap-3"></div>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+      <section class="lg:col-span-2 bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="p-4 border-b border-gray-200 dark:border-slate-800 flex items-center justify-between"><h2 class="font-semibold">승인 대기 <span id="apr-count" class="ml-1 text-sm text-amber-600"></span></h2><span class="text-xs text-gray-500">승인 = 실행 허가 기록 + 사람이 할 일 생성</span></div>
+        <div id="approvals" class="divide-y divide-gray-100 dark:divide-slate-800"></div>
+      </section>
+      <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="p-4 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">내 할 일 (대표)</h2></div>
+        <div id="human" class="divide-y divide-gray-100 dark:divide-slate-800"></div>
+      </section>
+    </div>
+
+    <section>
+      <h2 class="font-semibold mb-3">부서 · 직원</h2>
+      <div id="depts" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+    </section>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+      <section class="lg:col-span-2 bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="p-4 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">실시간 활동</h2></div>
+        <ol id="activity" class="p-4 space-y-2 max-h-96 overflow-y-auto text-sm"></ol>
+      </section>
+      <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="p-4 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">업무 지시</h2></div>
+        <div class="p-4 space-y-3 text-sm">
+          <select id="t-dept" class="w-full px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800"></select>
+          <input id="t-title" maxlength="200" placeholder="업무 제목" class="w-full px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800" />
+          <textarea id="t-detail" rows="3" placeholder="상세 내용(선택)" class="w-full px-3 py-2 border border-gray-300 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800"></textarea>
+          <label class="flex items-center gap-2">우선순위 <input id="t-prio" type="number" min="1" max="9" value="5" class="w-16 px-2 py-1 border rounded bg-white dark:bg-slate-800" /> <span class="text-xs text-gray-500">(8↑ 선임 배정)</span></label>
+          <label class="flex items-center gap-2"><input id="t-conf" type="checkbox" /> 기밀 업무 (Cloudflare AI 에서만 처리)</label>
+          <label class="flex items-center gap-2"><input id="t-human" type="checkbox" /> 대표(사람)가 할 일로 등록</label>
+          <button id="t-submit" class="w-full bg-primary text-white py-2 rounded-lg font-medium">지시하기</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="grid lg:grid-cols-3 gap-6">
+      <section class="lg:col-span-2 bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-x-auto">
+        <div class="p-4 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">최근 업무</h2></div>
+        <table class="w-full text-sm"><tbody id="tasks"></tbody></table>
+      </section>
+      <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+        <div class="p-4 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">회의 (필요할 때만)</h2></div>
+        <div id="meetings" class="divide-y divide-gray-100 dark:divide-slate-800 text-sm"></div>
+      </section>
+    </div>
+
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800">
+      <div class="p-4 border-b border-gray-200 dark:border-slate-800"><h2 class="font-semibold">AI 공급자 (Cloudflare + 외부 무료 AI)</h2><p class="text-xs text-gray-500 mt-1">외부 AI 는 개인정보를 지운 업무 텍스트만 받으며, 기밀 업무에는 쓰이지 않습니다. API 키는 Worker Secret 으로만 등록합니다.</p></div>
+      <div id="providers" class="grid md:grid-cols-2 gap-3 p-4"></div>
+    </section>
+  </div>
+  <script>
+    import { initCompany } from '@/scripts/company.ts';
+    initCompany();
+  </script>
+</Layout>

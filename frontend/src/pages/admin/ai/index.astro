@@ -1,0 +1,23 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+---
+<Layout title="CAS 관리 (운영자)">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div><h1 class="text-2xl font-bold">CAS 관리</h1><p class="text-sm text-gray-500">모델 동기화, 분류·단가·활성화, 이번 달 매출·원가, 긴급 차단.</p></div>
+      <div class="flex gap-2">
+        <button id="sync-btn" class="bg-gray-100 hover:bg-gray-200 dark:bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium">공식 모델 동기화</button>
+        <button id="kill-btn" class="px-4 py-2 rounded-lg text-sm font-medium text-white bg-red-600 hover:bg-red-700">긴급 차단</button>
+      </div>
+    </div>
+    <p id="admin-ai-msg" class="hidden text-sm text-blue-700"></p>
+    <div class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 overflow-x-auto">
+      <table class="w-full text-sm"><thead><tr class="text-left text-gray-500"><th class="p-3">모델</th><th>분류</th><th>입력/출력 Neurons/M</th><th>판매/1k</th><th>요청</th><th>매출</th><th>원가</th><th>상태</th><th></th></tr></thead>
+        <tbody id="admin-ai-rows"></tbody></table>
+    </div>
+  </div>
+  <script>
+    import { initAdminAi } from '@/scripts/admin-ai.ts';
+    initAdminAi();
+  </script>
+</Layout>

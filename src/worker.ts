@@ -13,6 +13,8 @@ import { costSideRate } from "./lib/fx";
 import { recordFxSample } from "./lib/fxStore";
 import { ForbiddenError, rotateCsrf } from "./lib/auth";
 import { routeApi, listPlans } from "./api";
+import { runGateway } from "./lib/cas";
+import { runTick } from "./lib/workforce";
 
 export interface Env {
   DB: D1Like;
@@ -27,6 +29,8 @@ export interface Env {
   CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   /** 정적 자산 바인딩(wrangler.jsonc assets). 테스트 환경에는 없을 수 있다. */
+  /** Workers AI 바인딩(CAS). live 모드에서 필요. */
+  AI?: { run(model: string, input: unknown): Promise<any> };
   ASSETS?: { fetch(req: Request): Promise<Response> };
 }
 
@@ -70,6 +74,28 @@ async function schemaReady(db: D1Like): Promise<string | null> {
   }
   schemaOk = true;
   return null;
+}
+
+// CAS 게이트웨이: 고객 API 키(Bearer)로 인증한다. 세션·CSRF 대상이 아니며 서버 간 호출 전용이다.
+async function handleAiGateway(req: Request, env: Env): Promise<Response> {
+  const h = { "Content-Type": "application/json", ...SECURITY_HEADERS };
+  const out = (d: unknown, st = 200) => new Response(JSON.stringify(d), { status: st, headers: h });
+  if (req.method !== "POST") return out({ error: "method_not_allowed" }, 405);
+  const raw = await req.text();
+  if (raw.length > 262_144) return out({ error: "too_large", message: "요청 본문은 256KB 이하여야 합니다." }, 413);
+  let body: { model?: unknown; input?: unknown; max_tokens?: unknown };
+  try { body = JSON.parse(raw); } catch { return out({ error: "bad_json" }, 400); }
+  try {
+    const rt = buildRuntime(env);
+    const auth = req.headers.get("Authorization");
+    const r = await runGateway(env.DB, rt.ai, auth?.startsWith("Bearer ") ? auth.slice(7) : null, body,
+      { nowMs: Date.now(), requestId: (req.headers.get("X-Request-Id") ?? crypto.randomUUID()).slice(0, 80), maxOutputTokens: typeof body.max_tokens === "number" ? body.max_tokens : undefined });
+    if (!r.ok) return out({ error: r.error, message: r.message }, r.status);
+    return out({ result: r.result, usage: r.usage, estimated_neurons: r.neurons, billed_micro_usd: r.billedMicro, balance_micro_usd: r.balanceMicro, note: "Neurons 는 공식 단가로 환산한 추정치입니다." });
+  } catch (e) {
+    console.error("[AI Gateway Error]", e instanceof Error ? e.message : e);
+    return out({ error: "internal_error" }, 500);
+  }
 }
 
 async function handleApi(req: Request, env: Env): Promise<Response> {
@@ -197,6 +223,7 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
 export default {
   async fetch(req: Request, env: Env, _ctx?: any): Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === "/v1/ai/run") return handleAiGateway(req, env);
     if (url.pathname.startsWith("/api/")) {
       return handleApi(req, env);
     }
@@ -231,5 +258,7 @@ export default {
   async scheduled(_event: unknown, env: Env): Promise<void> {
     const rt = buildRuntime(env);
     await runScheduled(env.DB, { queue: env.JOBS ?? null, zones: rt.zones }, Date.now());
+    // AI 직원: 운영자가 켜 둔 경우에만, 설정된 간격마다 실행한다(내부에서 비활성·일시정지·한도를 확인).
+    try { await runTick(env.DB, rt.llm, Date.now()); } catch (e) { console.error("[workforce tick]", e instanceof Error ? e.message : e); }
   },
 };

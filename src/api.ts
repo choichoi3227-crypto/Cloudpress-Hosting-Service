@@ -4,7 +4,9 @@ import { verifyPassword } from "./lib/crypto";
 import type { Env } from "./worker";
 import { buildRuntime } from "./runtime";
 import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
-import { applyDomainCapture } from "./lib/webhooks";
+import { applyDomainCapture, applyAiTopup } from "./lib/webhooks";
+import { seedWorkforce, runTick, companyOverview, createTask, decideApproval, completeHumanTask, setSetting, loadSettings } from "./lib/workforce";
+import { issueKey, revokeKey, rotateKey, creditBalance, syncModels, adminSetModel, currentPrice, MIN_TOPUP_MICRO, MAX_TOPUP_MICRO, COST_MICRO_PER_NEURON, type Tier } from "./lib/cas";
 import { quoteCpuAddon, purchaseCpuAddon, loadCpuPolicy, saveCpuPolicy } from "./lib/cpuAddons";
 import { parseCurrency } from "./lib/currency";
 import { recordFxSample } from "./lib/fxStore";
@@ -122,6 +124,17 @@ add("GET", "/api/paypal/return", async (c) => {
   const orderId = c.url.searchParams.get("order");
   const token = c.url.searchParams.get("token"); // PayPal 주문 ID
   const redirect = (to: string) => new Response(null, { status: 302, headers: { Location: `${c.env.APP_ORIGIN}${to}` } });
+  if (kind === "ai" && orderId && token) {
+    const t = await one<{ id: string; paypal_order_id: string | null; status: string }>(c.env.DB, "SELECT id, paypal_order_id, status FROM ai_credit_topups WHERE id = ? AND customer_id = ?", orderId, c.session.user.id);
+    if (!t || t.paypal_order_id !== token) return redirect("/ai?topup=invalid");
+    if (t.status === "paid") return redirect("/ai?topup=done");
+    try {
+      const cap = await buildRuntime(c.env).paypal.captureOrder(token, `capture:${t.id}`);
+      if (cap.status !== "COMPLETED") return redirect("/ai?topup=pending");
+      await applyAiTopup(c.env.DB, t.id, cap.captureId, cap.currency, cap.amountMinor, c.now);
+      return redirect("/ai?topup=success");
+    } catch { return redirect("/ai?topup=error"); } // 실제로 캡처됐다면 PAYMENT.CAPTURE.COMPLETED 웹훅이 멱등하게 반영한다.
+  }
   if (kind !== "domain" || !orderId || !token) return redirect("/dashboard");
   const o = await one<{ id: string; paypal_order_id: string | null; status: string }>(c.env.DB, "SELECT id, paypal_order_id, status FROM domain_orders WHERE id = ? AND customer_id = ?", orderId, c.session.user.id);
   if (!o || o.paypal_order_id !== token) return redirect("/domains?checkout=invalid");
@@ -182,6 +195,181 @@ add("PUT", "/api/admin/cpu-policy", async (c) => {
   const b = await c.body(4096);
   if (!b) return c.json({ error: "bad_request" }, 400);
   return c.json(await saveCpuPolicy(c.env.DB, c.session.user.id, b, c.now));
+}, true);
+
+/* ───────────── CAS (AI) ───────────── */
+
+const TIER_PRODUCT: Record<string, string> = { general: "cas-general", performance: "cas-performance", premium: "cas-premium" };
+
+add("GET", "/api/cas/models", async (c) => {
+  const rows = await all(c.env.DB, `SELECT m.id, m.model_id, m.name, m.task_type, m.tier, m.input_neurons_per_m i, m.output_neurons_per_m o, m.unit_neurons u, m.official_status,
+      (SELECT sell_per_1k_micro FROM ai_model_prices WHERE model_id = m.id ORDER BY version DESC LIMIT 1) AS sell
+    FROM ai_models m WHERE m.enabled = 1 AND m.official_status != 'removed' ORDER BY m.tier, m.name`);
+  const prods: Record<string, number> = Object.fromEntries((await all(c.env.DB, "SELECT p.id, pr.monthly_micro AS m FROM products p JOIN prices pr ON pr.product_id = p.id AND pr.retired_at IS NULL WHERE p.kind = 'cas'")).map((r: any) => [r.id, r.m]));
+  const mine = new Set((await all(c.env.DB, "SELECT a.model_id AS m FROM cas_model_access a JOIN subscriptions s ON s.id = a.subscription_id WHERE a.customer_id = ? AND s.status IN ('active','canceling','past_due')", c.session.user.id)).map((r: any) => r.m));
+  return c.json({ models: rows.map((r: any) => ({ id: r.id, modelId: r.model_id, name: r.name, task: r.task_type, tier: r.tier, monthlyMicro: prods[TIER_PRODUCT[r.tier] ?? ""] ?? null, sellPer1kNeuronsMicro: r.sell, deprecating: r.official_status === "deprecating", subscribed: mine.has(r.id) })) });
+});
+
+add("POST", "/api/cas/subscribe", async (c) => {
+  const b = await c.body(512);
+  if (!b || typeof b.modelId !== "string") return c.json({ error: "bad_request" }, 400);
+  const m = await one<{ id: string; tier: string; i: number | null; o: number | null; u: number | null }>(c.env.DB, "SELECT id, tier, input_neurons_per_m i, output_neurons_per_m o, unit_neurons u FROM ai_models WHERE id = ? AND enabled = 1 AND official_status != 'removed'", b.modelId);
+  if (!m || !(m.i || m.o || m.u) || !(await currentPrice(c.env.DB, m.id))) return c.json({ error: "model_not_found", message: "판매 중인 모델이 아닙니다." }, 404);
+  const dup = await one(c.env.DB, "SELECT a.subscription_id FROM cas_model_access a JOIN subscriptions s ON s.id = a.subscription_id WHERE a.customer_id = ? AND a.model_id = ? AND s.status IN ('incomplete','active','canceling','past_due','suspended')", c.session.user.id, m.id);
+  if (dup) return c.json({ error: "already_subscribed", message: "이미 이 모델을 구독 중이거나 결제 대기 중입니다." }, 409);
+  const r = await createSubscriptionCheckout(c.env.DB, buildRuntime(c.env).paypal, c.session.user.id, TIER_PRODUCT[m.tier]!, "USD", { appOrigin: c.env.APP_ORIGIN, nowMs: c.now });
+  await c.env.DB.prepare("INSERT INTO cas_model_access(subscription_id,customer_id,model_id,created_at) VALUES(?,?,?,?)").bind(r.subscriptionId, c.session.user.id, m.id, nowIso(c.now)).run();
+  return c.json({ ok: true, subscriptionId: r.subscriptionId, url: r.url }, 201);
+});
+
+add("GET", "/api/cas/keys", async (c) => c.json({ keys: (await all(c.env.DB, "SELECT id, name, prefix, status, rate_limit_per_min, monthly_cap_micro, created_at, last_used_at FROM ai_api_keys WHERE customer_id = ? AND status != 'revoked' ORDER BY created_at DESC", c.session.user.id)).map((k: any) => ({ id: k.id, name: k.name, prefix: k.prefix, status: k.status, rateLimitPerMin: k.rate_limit_per_min, monthlyCapMicro: k.monthly_cap_micro, createdAt: k.created_at, lastUsedAt: k.last_used_at })) }));
+add("POST", "/api/cas/keys", async (c) => {
+  const b = await c.body(1024);
+  const k = await issueKey(c.env.DB, c.session.user.id, String(b?.name ?? ""), c.now, { rateLimitPerMin: b?.rateLimitPerMin, monthlyCapMicro: b?.monthlyCapMicro });
+  return c.json({ ...k, notice: "이 키는 지금만 볼 수 있습니다. 안전한 곳에 보관하세요." }, 201);
+});
+add("POST", "/api/cas/keys/:id/revoke", async (c, m) => { await revokeKey(c.env.DB, c.session.user.id, m[1]!, c.now); return c.json({ ok: true }); });
+add("POST", "/api/cas/keys/:id/rotate", async (c, m) => c.json({ ...(await rotateKey(c.env.DB, c.session.user.id, m[1]!, c.now)), notice: "이전 키는 폐기되었습니다. 새 키는 지금만 볼 수 있습니다." }, 201));
+
+add("GET", "/api/cas/usage", async (c) => {
+  const ms = new Date(c.now); ms.setUTCDate(1); ms.setUTCHours(0, 0, 0, 0);
+  const rows = await all(c.env.DB, `SELECT m.model_id, m.name, COUNT(*) AS requests, SUM(u.neurons) AS neurons, SUM(u.billed_micro) AS billed
+    FROM ai_usage_records u JOIN ai_models m ON m.id = u.model_id JOIN cas_model_access a ON a.subscription_id = u.subscription_id
+    WHERE a.customer_id = ? AND u.ts >= ? GROUP BY m.id ORDER BY billed DESC`, c.session.user.id, nowIso(ms.getTime()));
+  return c.json({ balanceMicro: await creditBalance(c.env.DB, c.session.user.id), month: nowIso(ms.getTime()).slice(0, 7), models: rows, note: "Neurons 는 공식 단가로 환산한 추정치이며 Cloudflare 의 실제 집계와 소폭 다를 수 있습니다." });
+});
+
+// 크레딧 충전(PayPal 일회성 결제). 사용량 요금은 이 선불 크레딧에서 차감된다.
+add("POST", "/api/cas/credits/topup", async (c) => {
+  const b = await c.body(256);
+  const usd = Number(b?.amountUsd);
+  const micro = Math.round(usd * 1_000_000);
+  if (!Number.isFinite(usd) || micro % 10_000 !== 0 || micro < MIN_TOPUP_MICRO || micro > MAX_TOPUP_MICRO) return c.json({ error: "bad_amount", message: `충전 금액은 $${MIN_TOPUP_MICRO / 1e6} ~ $${MAX_TOPUP_MICRO / 1e6} 사이(센트 단위)여야 합니다.` }, 400);
+  const id = newId("top");
+  const ord = await buildRuntime(c.env).paypal.createOrder({ customId: `ai:${id}`, currency: "USD", amountMinor: micro / 10_000, description: "CloudPress AI 크레딧 충전",
+    returnUrl: `${c.env.APP_ORIGIN}/api/paypal/return?kind=ai&order=${encodeURIComponent(id)}`, cancelUrl: `${c.env.APP_ORIGIN}/ai?topup=cancel` }, `aitopup:${id}`);
+  await c.env.DB.prepare("INSERT INTO ai_credit_topups(id,customer_id,amount_micro,paypal_order_id,created_at) VALUES(?,?,?,?,?)").bind(id, c.session.user.id, micro, ord.id, nowIso(c.now)).run();
+  return c.json({ ok: true, url: ord.approveUrl }, 201);
+});
+
+// 운영자
+add("GET", "/api/admin/cas/overview", async (c) => {
+  const ms = new Date(c.now); ms.setUTCDate(1); ms.setUTCHours(0, 0, 0, 0);
+  const models = await all(c.env.DB, `SELECT m.id, m.model_id, m.name, m.task_type, m.tier, m.enabled, m.official_status, m.pricing_source, m.input_neurons_per_m i, m.output_neurons_per_m o, m.unit_neurons u, m.last_synced_at,
+      (SELECT sell_per_1k_micro FROM ai_model_prices WHERE model_id = m.id ORDER BY version DESC LIMIT 1) AS sell,
+      (SELECT COUNT(*) FROM ai_usage_records WHERE model_id = m.id AND ts >= ?) AS requests,
+      (SELECT COALESCE(SUM(neurons),0) FROM ai_usage_records WHERE model_id = m.id AND ts >= ?) AS neurons,
+      (SELECT COALESCE(SUM(billed_micro),0) FROM ai_usage_records WHERE model_id = m.id AND ts >= ?) AS billed,
+      (SELECT COALESCE(SUM(cost_micro),0) FROM ai_usage_records WHERE model_id = m.id AND ts >= ?) AS cost
+    FROM ai_models m ORDER BY m.enabled DESC, m.name`, nowIso(ms.getTime()), nowIso(ms.getTime()), nowIso(ms.getTime()), nowIso(ms.getTime()));
+  const kill = await one(c.env.DB, "SELECT value_json FROM admin_settings WHERE key = 'cas_kill_switch'");
+  return c.json({ models, killSwitch: kill?.value_json === "true", costPerNeuronMicro: COST_MICRO_PER_NEURON });
+}, true);
+
+add("POST", "/api/admin/cas/sync", async (c) => {
+  const env = c.env;
+  if (env.CLOUDPRESS_MODE !== "live") {
+    const mock = [{ name: "@cf/meta/llama-3.1-8b-instruct", task: { name: "Text Generation" }, properties: [{ property_id: "price", value: [{ unit: "per M input tokens", price: 0.282, currency: "USD" }, { unit: "per M output tokens", price: 0.827, currency: "USD" }] }] }];
+    return c.json({ mode: "mock", ...(await syncModels(env.DB, mock as any, c.now)) });
+  }
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) return c.json({ error: "not_configured", message: "CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID 가 필요합니다." }, 503);
+  const models: any[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai/models/search?per_page=100&page=${page}`, { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } });
+    if (!res.ok) return c.json({ error: "upstream_error", message: `Cloudflare 모델 목록 조회 실패(HTTP ${res.status})` }, 502);
+    const j: any = await res.json();
+    models.push(...(j.result ?? []));
+    if (!j.result || j.result.length < 100) break;
+  }
+  return c.json({ mode: "live", ...(await syncModels(env.DB, models, c.now)) });
+}, true);
+
+add("PATCH", "/api/admin/cas/models/:id", async (c, m) => {
+  const b = await c.body(1024);
+  if (!b) return c.json({ error: "bad_request" }, 400);
+  await adminSetModel(c.env.DB, c.session.user.id, m[1]!, { enabled: b.enabled, tier: b.tier as Tier | undefined, inputNeuronsPerM: b.inputNeuronsPerM, outputNeuronsPerM: b.outputNeuronsPerM, unitNeurons: b.unitNeurons, sellPer1kMicro: b.sellPer1kMicro }, c.now);
+  return c.json({ ok: true });
+}, true);
+
+add("POST", "/api/admin/cas/kill", async (c) => {
+  const b = await c.body(128);
+  const on = b?.on === true;
+  await c.env.DB.prepare("INSERT INTO admin_settings(key,value_json,updated_by,updated_at) VALUES('cas_kill_switch',?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_by=excluded.updated_by, updated_at=excluded.updated_at").bind(on ? "true" : "false", c.session.user.id, nowIso(c.now)).run();
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "admin.cas_kill_switch", detail: { on } }, c.now);
+  return c.json({ ok: true, killSwitch: on });
+}, true);
+
+/* ───────────── AI 직원(회사 운영) — 운영자 전용 ───────────── */
+
+add("GET", "/api/admin/company/overview", async (c) => {
+  const has = await one(c.env.DB, "SELECT 1 AS x FROM ai_departments LIMIT 1");
+  if (!has) await seedWorkforce(c.env.DB, c.now); // 최초 1회 조직 구성(멱등)
+  return c.json(await companyOverview(c.env.DB, c.now));
+}, true);
+
+add("POST", "/api/admin/company/tick", async (c) => {
+  const rt = buildRuntime(c.env);
+  await seedWorkforce(c.env.DB, c.now);
+  const r = await runTick(c.env.DB, rt.llm, c.now, { force: true });
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "company.manual_tick", detail: r }, c.now);
+  return c.json(r);
+}, true);
+
+add("POST", "/api/admin/company/settings", async (c) => {
+  const b = await c.body(512);
+  if (!b) return c.json({ error: "bad_request" }, 400);
+  const map: Record<string, string> = { enabled: "workforce_enabled", paused: "workforce_paused", maxTasksPerTick: "workforce_max_tasks_per_tick", tickMinutes: "workforce_tick_minutes", dailyRunCap: "workforce_daily_run_cap" };
+  for (const [k, key] of Object.entries(map)) if (b[k] !== undefined) {
+    const v = typeof b[k] === "boolean" ? String(b[k]) : Number.isFinite(Number(b[k])) ? String(Math.floor(Number(b[k]))) : null;
+    if (v === null) return c.json({ error: "bad_value", message: `${k} 값이 올바르지 않습니다.` }, 400);
+    await setSetting(c.env.DB, c.session.user.id, key, v, c.now);
+  }
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "company.settings", detail: b }, c.now);
+  return c.json(await loadSettings(c.env.DB));
+}, true);
+
+add("POST", "/api/admin/company/tasks", async (c) => {
+  const b = await c.body(8192);
+  if (!b) return c.json({ error: "bad_request" }, 400);
+  const id = await createTask(c.env.DB, c.session.user.id, { department: String(b.department ?? ""), title: String(b.title ?? ""), detail: b.detail, priority: Number(b.priority) || 5, confidential: b.confidential === true, human: b.human === true }, c.now);
+  return c.json({ ok: true, id }, 201);
+}, true);
+
+add("POST", "/api/admin/company/tasks/:id/complete", async (c, m) => { await completeHumanTask(c.env.DB, c.session.user.id, m[1]!, c.now); return c.json({ ok: true }); }, true);
+
+add("POST", "/api/admin/company/approvals/:id/decide", async (c, m) => {
+  const b = await c.body(1024);
+  if (!b || typeof b.approve !== "boolean") return c.json({ error: "bad_request" }, 400);
+  await decideApproval(c.env.DB, c.session.user.id, m[1]!, b.approve, String(b.note ?? ""), c.now);
+  return c.json({ ok: true });
+}, true);
+
+add("PATCH", "/api/admin/company/providers/:name", async (c, m) => {
+  const b = await c.body(1024);
+  if (!b) return c.json({ error: "bad_request" }, 400);
+  const p = await one<{ external: number }>(c.env.DB, "SELECT external FROM ai_providers WHERE name = ?", m[1]);
+  if (!p) return c.json({ error: "not_found" }, 404);
+  // 외부 무료 AI 를 켜는 것은 (개인정보를 지운) 업무 텍스트가 외부 사업자로 전송됨을 운영자가 인지했다는 확인이 필요하다.
+  if (b.enabled === true && p.external && b.acknowledgeExternal !== true) return c.json({ error: "ack_required", message: "외부 AI 는 업무 텍스트(개인정보 마스킹 후)가 해당 사업자로 전송되며 무료 한도·약관 확인이 필요합니다. 확인했다면 acknowledgeExternal 을 true 로 보내세요." }, 400);
+  if (b.dailyLimit !== undefined && (!Number.isInteger(b.dailyLimit) || b.dailyLimit < 0 || b.dailyLimit > 100000)) return c.json({ error: "bad_value" }, 400);
+  if (b.enabled !== undefined) await c.env.DB.prepare("UPDATE ai_providers SET enabled = ? WHERE name = ?").bind(b.enabled ? 1 : 0, m[1]).run();
+  if (b.dailyLimit !== undefined) await c.env.DB.prepare("UPDATE ai_providers SET daily_limit = ? WHERE name = ?").bind(b.dailyLimit, m[1]).run();
+  await audit(c.env.DB, { actorId: c.session.user.id, action: "company.provider_update", targetType: "ai_provider", targetId: m[1], detail: { enabled: b.enabled, dailyLimit: b.dailyLimit } }, c.now);
+  return c.json({ ok: true });
+}, true);
+
+add("POST", "/api/admin/company/goals", async (c) => {
+  const b = await c.body(512);
+  const target = Number(b?.target);
+  if (!b || typeof b.title !== "string" || !b.title.trim() || !["active_subscriptions", "mrr_usd", "ai_margin_pct"].includes(b.metric) || !Number.isFinite(target) || target <= 0) return c.json({ error: "bad_request", message: "title, metric(active_subscriptions|mrr_usd|ai_margin_pct), target(>0)이 필요합니다." }, 400);
+  await c.env.DB.prepare("INSERT INTO company_goals(id,title,metric,target,created_at) VALUES(?,?,?,?,?)").bind(newId("goal"), b.title.trim().slice(0, 120), b.metric, target, nowIso(c.now)).run();
+  return c.json({ ok: true }, 201);
+}, true);
+
+add("POST", "/api/admin/company/agents/:id/pause", async (c, m) => {
+  const b = await c.body(128);
+  const r = await c.env.DB.prepare("UPDATE ai_agents SET status = ? WHERE id = ?").bind(b?.paused === true ? "paused" : "idle", m[1]).run();
+  return r.meta.changes ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
 }, true);
 
 add("POST", "/api/billing/portal", async (c) => {
