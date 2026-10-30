@@ -5,10 +5,7 @@ import type { Env } from "./worker";
 import { buildRuntime } from "./runtime";
 import { createSubscriptionCheckout, createDomainCheckout, createPortal } from "./lib/checkout";
 import { applyDomainCapture, applyAiTopup } from "./lib/webhooks";
-<<<<<<< ours
-=======
 import { applyAffiliate, affiliateSummary, setAffiliateStatus, adminAffiliateOverview, approvePayout, markPayoutPaid, releasePayout, clearReferralFlag, saveAffiliatePolicy, settleAffiliates } from "./lib/affiliateProgram";
->>>>>>> theirs
 import { seedWorkforce, runTick, companyOverview, createTask, decideApproval, completeHumanTask, setSetting, loadSettings } from "./lib/workforce";
 import { issueKey, revokeKey, rotateKey, creditBalance, syncModels, adminSetModel, currentPrice, MIN_TOPUP_MICRO, MAX_TOPUP_MICRO, COST_MICRO_PER_NEURON, type Tier } from "./lib/cas";
 import { quoteCpuAddon, purchaseCpuAddon, loadCpuPolicy, saveCpuPolicy } from "./lib/cpuAddons";
@@ -376,8 +373,6 @@ add("POST", "/api/admin/company/agents/:id/pause", async (c, m) => {
   return r.meta.changes ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
 }, true);
 
-<<<<<<< ours
-=======
 /* ───────────── 제휴(Affiliate) ───────────── */
 
 add("GET", "/api/affiliate", async (c) => c.json(await affiliateSummary(c.env.DB, c.session.user.id, c.env.APP_ORIGIN)));
@@ -402,7 +397,6 @@ add("POST", "/api/admin/affiliate/payouts/:id/reject", async (c, m) => { const b
 add("PUT", "/api/admin/affiliate/policy", async (c) => { const b = await c.body(1024); if (!b) return c.json({ error: "bad_request" }, 400); return c.json(await saveAffiliatePolicy(c.env.DB, c.session.user.id, b, c.now)); }, true);
 add("POST", "/api/admin/affiliate/settle", async (c) => { const b = await c.body(128); return c.json(await settleAffiliates(c.env.DB, c.now, { forcePayout: b?.forcePayout === true })); }, true);
 
->>>>>>> theirs
 add("POST", "/api/billing/portal", async (c) => {
   const rt = buildRuntime(c.env);
   return c.json(await createPortal(c.env.DB, rt.paypal, c.session.user.id, c.env.APP_ORIGIN, rt.paypalEnv));

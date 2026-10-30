@@ -4,10 +4,7 @@ import { valueToCents, type PayPalPort, type WebhookHeaders } from "./paypal.cli
 import { markPaid } from "./domainOrders";
 import { enqueueResize } from "./cpuAddons";
 import { creditTopup } from "./cas";
-<<<<<<< ours
-=======
 import { accrueCommission } from "./affiliateProgram";
->>>>>>> theirs
 
 type Sub = { id: string; customer_id: string; status: SubscriptionState; paypal_subscription_id: string | null; current_period_end: string | null };
 
