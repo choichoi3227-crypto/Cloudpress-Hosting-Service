@@ -16,6 +16,9 @@ import { routeApi, listPlans } from "./api";
 import { runGateway } from "./lib/cas";
 import { runTick } from "./lib/workforce";
 import { bindReferral } from "./lib/affiliateProgram";
+interface Env {
+  DB: D1Database;
+}
 
 export interface Env {
   DB: D1Like;
