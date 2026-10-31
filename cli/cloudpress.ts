@@ -57,7 +57,7 @@ program
       .option("-d, --database <name>", "Database name")
       .action(async (options) => {
         const env = options.env === "production" ? "production" : "staging";
-        await runCommand("npx", ["wrangler", "d1", "execute", options.database || "cloudpress-db", "--env", env, "--command", ".schema"]);
+        await runCommand("npx", ["wrangler", "d1", "execute", options.database || "cloudpress-dev", "--env", env, "--command", ".schema"]);
       })
   )
   .addCommand(
