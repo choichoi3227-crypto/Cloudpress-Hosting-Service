@@ -5,3 +5,4 @@ node_modules
 .env.*
 dist
 !.env.example
+worker.js
