@@ -34,8 +34,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "cloudpress-dev",
-      "database_id": "09280e4c-e502-4912-8c4d-3647546c9c69",
+      "database_name": "cloudpress-db",
+      "database_id": "ff205a49-ab48-4df9-a66f-8bbe64de2a8d",
       "migrations_dir": "migrations"
     }
   ],
