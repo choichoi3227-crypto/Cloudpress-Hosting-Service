@@ -15,7 +15,7 @@ const cfModel = { name: MODEL, task: { name: "Text Generation" }, properties: [{
 async function world() {
   const { db, raw } = makeDb();
   raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h'),('u2','b@x.co','h')");
-  raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('cas-general','cas','CAS 일반')");
+  raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('cas-general','cas','CAS 일반')");
   raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pc','cas-general',1,990000)");
   await syncModels(db, [cfModel], NOW);
   const pk = one(raw, "select id from ai_models").id as string;

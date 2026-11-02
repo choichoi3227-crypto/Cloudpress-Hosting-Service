@@ -80,7 +80,7 @@ describe("인증", () => {
   it("고객 간 자원 격리(소유자만 접근)", async () => {
     const { db, raw } = makeDb();
     raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h'),('u2','b@x.co','h')");
-    raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('p','csw','x')");
+    raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('p','csw','x')");
     raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr','p',1,1)");
     raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id) VALUES('s1','u1','p','pr')");
     raw.exec("INSERT INTO worker_services(id,subscription_id,customer_id,logical_name,route_key) VALUES('w1','s1','u1','api','rk1')");

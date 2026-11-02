@@ -16,7 +16,7 @@ const contact = { email: "o@x.co", phone: "+82.1012345678", postal_info: { name:
 
 function env(over: Partial<Env> = {}) {
   const { db, raw } = makeDb();
-  raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
+  raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
   raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('p1','ccs-basic',1,12990000)");
   return { env: { DB: db, APP_ORIGIN: ORIGIN, CLOUDPRESS_MODE: "mock", ...over } as Env, raw };
 }

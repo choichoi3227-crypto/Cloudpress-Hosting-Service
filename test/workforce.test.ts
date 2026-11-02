@@ -195,7 +195,7 @@ describe("유틸·현황", () => {
   it("회사 지표는 실제 DB 값, 개요에 부서·에이전트·승인·공급자 사용량이 포함된다", async () => {
     const w = await world({ settings: { workforce_enabled: "true" } }); noRoutines(w.raw);
     w.raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','c@x.co','h')");
-    w.raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('p1','ccs','CCS')");
+    w.raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('p1','ccs','CCS')");
     w.raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr1','p1',1,12990000)");
     w.raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,status) VALUES('s1','u1','p1','pr1','active'),('s2','u1','p1','pr1','past_due')");
     expect(await gatherMetrics(w.db, NOW)).toMatchObject({ users: 2, activeSubscriptions: 1, mrrUsd: 12.99, pastDueSubscriptions: 1, subscriptionsByKind: { ccs: 1 }, aiMarginPct: null });

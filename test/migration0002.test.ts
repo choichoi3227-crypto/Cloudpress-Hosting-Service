@@ -12,7 +12,7 @@ describe("마이그레이션 0002 (데이터 보존 + 새 제약)", () => {
     raw.exec("PRAGMA foreign_keys = ON");
     raw.exec(readMigration("0001_init.sql"));
     raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u','a@b.co','h')");
-    raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('pg-micro','supabase_pg','x'),('cloudb-mariadb','cloudb','y')");
+    raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('pg-micro','supabase_pg','x'),('cloudb-mariadb','cloudb','y')");
     raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr1','pg-micro',1,1),('pr2','cloudb-mariadb',1,1)");
     raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id) VALUES('s1','u','pg-micro','pr1'),('s2','u','cloudb-mariadb','pr2')");
     raw.exec("INSERT INTO databases(id,subscription_id,customer_id,engine,provider) VALUES('d1','s1','u','postgres','supabase'),('d2','s2','u','mariadb','cloudb_container')");
@@ -28,7 +28,7 @@ describe("마이그레이션 0002 (데이터 보존 + 새 제약)", () => {
   it("엔진-제공자 조합 일관성: 허용 조합만 저장 가능", () => {
     const { raw } = makeDb();
     raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u','a@b.co','h')");
-    raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('p','cloudb_pg','x')");
+    raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('p','cloudb_pg','x')");
     raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr','p',1,1)");
     for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9]) raw.exec(`INSERT INTO subscriptions(id,customer_id,product_id,price_version_id) VALUES('s${i}','u','p','pr')`);
     const ins = (i: number, engine: string, provider: string, standby: string | null = null) =>
@@ -56,7 +56,7 @@ describe("마이그레이션 0002 (데이터 보존 + 새 제약)", () => {
   it("0003: 약정 기본 10GB, 대여 제약, 일별 사용량 연쇄 삭제", () => {
     const { raw } = makeDb();
     raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u','a@b.co','h')");
-    raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('p','cloudage','x')");
+    raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('p','cloudage','x')");
     raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr','p',1,1)");
     raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id) VALUES('s1','u','p','pr'),('s2','u','p','pr')");
     raw.exec("INSERT INTO storage_buckets(id,subscription_id,customer_id,r2_bucket_name) VALUES('b1','s1','u','n1'),('b2','s2','u','n2')");

@@ -15,7 +15,7 @@ const hook = (db: any, type: string, resource: any, now: number) => handlePayPal
 async function world() {
   const { db, raw } = makeDb();
   raw.exec("INSERT INTO users(id,email,password_hash) VALUES('admin','admin@x.co','h'),('aff','boss@aff.co','h'),('c1','cust1@x.co','h'),('c2','cust2@x.co','h')");
-  raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('p1','ccs','CCS')");
+  raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('p1','ccs','CCS')");
   raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr1','p1',1,100000000)"); // $100
   const a = await applyAffiliate(db, "aff", "pay@aff.co", T0);
   await setAffiliateStatus(db, "admin", a.id, "approved", T0);

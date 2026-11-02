@@ -13,7 +13,7 @@ const one = (raw: any, sql: string) => raw.prepare(sql).get() as any;
 function world() {
   const { db, raw } = makeDb();
   raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h'),('u2','b@x.co','h')");
-  raw.exec("INSERT INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
+  raw.exec("INSERT OR IGNORE INTO products(id,kind,name_ko) VALUES('ccs-basic','ccs','CCS Basic')");
   raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('price_v1','ccs-basic',1,12990000)");
   return { db, raw, paypal: new MockPayPal() };
 }

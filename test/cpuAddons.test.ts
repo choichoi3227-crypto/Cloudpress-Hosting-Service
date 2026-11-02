@@ -18,7 +18,7 @@ const sale = (id: string, sub: string, total = "6.99", custom?: string) => ({ id
 function world(instance = "basic") {
   const { db, raw } = makeDb();
   raw.exec("INSERT INTO users(id,email,password_hash) VALUES('u1','a@x.co','h'),('u2','b@x.co','h')");
-  raw.exec(`INSERT INTO products(id,kind,name_ko,instance_type) VALUES('p-ccs','ccs','CCS','${instance}'),('p-csw','csw','CSW',NULL)`);
+  raw.exec(`INSERT OR IGNORE INTO products(id,kind,name_ko,instance_type) VALUES('p-ccs','ccs','CCS','${instance}'),('p-csw','csw','CSW',NULL)`);
   raw.exec("INSERT INTO prices(id,product_id,version,monthly_micro) VALUES('pr1','p-ccs',1,12990000),('pr2','p-csw',1,4990000)");
   raw.exec("INSERT INTO subscriptions(id,customer_id,product_id,price_version_id,status) VALUES('s1','u1','p-ccs','pr1','active'),('s2','u1','p-csw','pr2','active')");
   raw.exec(`INSERT INTO containers(id,subscription_id,customer_id,instance_type,target_vcpu,actual_vcpu,state) VALUES('c1','s1','u1','${instance}',2,0.25,'running')`);

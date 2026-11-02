@@ -15,55 +15,141 @@ const { title } = Astro.props;
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title.endsWith("CloudPress") ? title : `${title} - CloudPress`}</title>
   </head>
-  <body class="bg-background dark:bg-background-dark text-text dark:text-text-dark min-h-screen flex flex-col font-sans">
-    <header class="bg-white dark:bg-slate-900 border-b border-gray-200 dark:border-slate-800 sticky top-0 z-50">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        <a href="/" class="flex items-center gap-2 text-2xl font-bold text-primary dark:text-blue-400">
-          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+    <!-- Top Header -->
+    <header class="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-50 h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center gap-4">
+        <!-- Mobile menu toggle button -->
+        <button id="mobile-menu-toggle" type="button" class="md:hidden p-2 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+          </svg>
+        </button>
+        <a href="/" class="flex items-center gap-2 text-xl font-bold text-primary dark:text-blue-400">
+          <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
           </svg>
-          CloudPress
+          <span>CloudPress</span>
         </a>
-        <nav class="flex flex-wrap items-center gap-4 text-sm">
-          <a href="/dashboard" class="text-sm font-medium hover:text-primary transition-colors">대시보드</a>
-          <a href="/services" class="text-sm font-medium hover:text-primary transition-colors">서비스</a>
-          <a href="/containers" class="text-sm font-medium hover:text-primary transition-colors">컨테이너</a>
-          <a href="/database" class="text-sm font-medium hover:text-primary transition-colors">데이터베이스</a>
-          <a href="/domains" class="text-sm font-medium hover:text-primary transition-colors">도메인</a>
-          <a href="/ai" class="text-sm font-medium hover:text-primary transition-colors">AI</a>
-          <a href="/affiliate" class="text-sm font-medium hover:text-primary transition-colors">제휴</a>
-          <a href="/billing" class="text-sm font-medium hover:text-primary transition-colors">청구</a>
-          <a href="/profile" class="text-sm font-medium hover:text-primary transition-colors">내 정보</a>
-          <span id="nav-operator" class="hidden items-center gap-4">
-            <a href="/admin/affiliate" class="text-sm font-medium text-amber-600 hover:underline">제휴 정산</a>
-            <a href="/admin/company" class="text-sm font-medium text-amber-600 hover:underline">AI 회사</a>
-            <a href="/gateway" class="text-sm font-medium text-amber-600 hover:underline">게이트웨이</a>
-            <a href="/mesh" class="text-sm font-medium text-amber-600 hover:underline">메쉬</a>
-            <a href="/observability" class="text-sm font-medium text-amber-600 hover:underline">관측</a>
-            <a href="/fleet" class="text-sm font-medium text-amber-600 hover:underline">플릿</a>
-          </span>
-          <a id="nav-admin" href="/admin" class="hidden text-sm font-medium text-amber-600 dark:text-amber-400 font-semibold hover:underline">관리자</a>
-          <span id="nav-user" class="hidden text-sm text-gray-500"></span>
-          <a id="nav-login" href="/login" class="bg-primary hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">로그인</a>
-          <button id="nav-logout" type="button" class="hidden text-sm font-medium text-gray-600 hover:text-primary">로그아웃</button>
-        </nav>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <span id="nav-user" class="hidden text-sm text-slate-600 dark:text-slate-300 font-medium"></span>
+        <a id="nav-login" href="/login" class="bg-primary hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">로그인</a>
+        <button id="nav-logout" type="button" class="hidden text-sm font-medium text-slate-600 hover:text-primary dark:text-slate-400">로그아웃</button>
       </div>
     </header>
 
-    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <slot />
-    </main>
+    <div class="flex flex-1 relative">
+      <!-- Left Sidebar (Collapsible) -->
+      <aside id="sidebar" class="bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 flex flex-col z-40 fixed md:sticky top-16 h-[calc(100vh-4rem)] w-64 -translate-x-full md:translate-x-0 shadow-lg md:shadow-none">
+        <!-- Sidebar Header / Collapse button -->
+        <div class="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+          <span class="sidebar-label text-xs font-semibold text-slate-400 uppercase tracking-wider">메뉴</span>
+          <button id="sidebar-toggle" type="button" class="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" title="사이드바 접기/펴기">
+            <svg id="sidebar-toggle-icon" class="w-5 h-5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"></path>
+            </svg>
+          </button>
+        </div>
 
+        <!-- Sidebar Navigation Links -->
+        <nav class="flex-1 overflow-y-auto p-3 space-y-1 text-sm font-medium">
+          <a href="/dashboard" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+            <span class="sidebar-label">대시보드</span>
+          </a>
+          <a href="/services" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path></svg>
+            <span class="sidebar-label">서비스</span>
+          </a>
+          <a href="/containers" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+            <span class="sidebar-label">컨테이너</span>
+          </a>
+          <a href="/database" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
+            <span class="sidebar-label">데이터베이스</span>
+          </a>
+          <a href="/domains" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path></svg>
+            <span class="sidebar-label">도메인</span>
+          </a>
+          <a href="/ai" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+            <span class="sidebar-label">AI</span>
+          </a>
+          <a href="/affiliate" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <span class="sidebar-label">제휴 프로그램</span>
+          </a>
+          <a href="/billing" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path></svg>
+            <span class="sidebar-label">청구 및 결제</span>
+          </a>
+          <a href="/profile" class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+            <svg class="w-5 h-5 flex-shrink-0 text-slate-500 group-hover:text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+            <span class="sidebar-label">내 정보</span>
+          </a>
+
+          <!-- Operator & Admin Links -->
+          <div id="nav-operator" class="hidden pt-4 mt-4 border-t border-slate-200 dark:border-slate-800 space-y-1">
+            <div class="sidebar-label px-3 text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase">운영자 / 관리자</div>
+            <a href="/admin/affiliate" class="flex items-center gap-3 px-3 py-2 rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-slate-800 transition-colors">
+              <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+              <span class="sidebar-label">제휴 정산</span>
+            </a>
+            <a href="/admin/company" class="flex items-center gap-3 px-3 py-2 rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-slate-800 transition-colors">
+              <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+              <span class="sidebar-label">AI 회사</span>
+            </a>
+            <a href="/gateway" class="flex items-center gap-3 px-3 py-2 rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-slate-800 transition-colors">
+              <span class="sidebar-label">게이트웨이</span>
+            </a>
+            <a href="/mesh" class="flex items-center gap-3 px-3 py-2 rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-slate-800 transition-colors">
+              <span class="sidebar-label">메쉬</span>
+            </a>
+            <a href="/observability" class="flex items-center gap-3 px-3 py-2 rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-slate-800 transition-colors">
+              <span class="sidebar-label">관측</span>
+            </a>
+            <a href="/fleet" class="flex items-center gap-3 px-3 py-2 rounded-lg text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-slate-800 transition-colors">
+              <span class="sidebar-label">플릿</span>
+            </a>
+          </div>
+        </nav>
+      </aside>
+
+      <!-- Backdrop for mobile drawer -->
+      <div id="sidebar-backdrop" class="fixed inset-0 bg-black/50 z-30 hidden md:hidden"></div>
+
+      <!-- Main Content Area -->
+      <main class="flex-1 min-w-0 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-all duration-300">
+        <slot />
+      </main>
+    </div>
+
+    <!-- Script for sidebar collapse/expand and mobile menu -->
     <script>
-      import '@/scripts/session.ts';
+
+
+      let isCollapsed = false;
+
+        isCollapsed = !isCollapsed;
+        if (isCollapsed) {
+        } else {
+        }
+      });
+
+      });
+
+      });
     </script>
 
-    <footer class="bg-white dark:bg-slate-900 border-t border-gray-200 dark:border-slate-800 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+    <footer class="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 text-center text-sm text-slate-500 dark:text-slate-400 z-20">
       &copy; 2026 CloudPress Inc. All rights reserved.
     </footer>
   </body>
 </html>
 
 <style is:global>
-  @import '../styles/global.css';
 </style>

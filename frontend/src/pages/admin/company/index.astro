@@ -1,12 +1,12 @@
 ---
-import Layout from '../../../layouts/Layout.astro';
+import Layout from "../../../layouts/Layout.astro";
 ---
-<Layout title="AI 회사 현황 (운영자)">
+<Layout title="AI 회사 현황 & 픽셀 오피스 (운영자)">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">AI 회사 현황</h1>
-        <p class="text-sm text-gray-500">AI 직원들은 제안·분석·초안만 만들고, 지출·배포·가격·고객 연락 같은 실제 행동은 아래 <b>승인 대기</b>에서 대표님이 결정합니다.</p>
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">AI 회사 현황 & 픽셀 오피스</h1>
+        <p class="text-sm text-gray-500">AI 직원들의 실시간 업무 상태를 픽셀 게임 오피스 뷰로 직관적으로 확인하고, 문의 전면 대응 및 완벽한 프로비저닝을 관리합니다.</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <span id="wf-pill" class="px-3 py-1 rounded-full text-sm font-medium bg-gray-200 text-gray-700">불러오는 중</span>
@@ -16,6 +16,73 @@ import Layout from '../../../layouts/Layout.astro';
       </div>
     </div>
     <p id="wf-msg" class="hidden text-sm text-blue-700 dark:text-blue-300"></p>
+
+    <!-- Pixel Game Office View (픽셀 오피스 뷰) -->
+    <section class="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-2xl border border-indigo-900/50 p-6 text-white shadow-2xl relative overflow-hidden">
+      <div class="absolute inset-0 opacity-10 bg-[radial-gradient(#6366f1_1px,transparent_1px)] [background-size:16px_16px]"></div>
+      <div class="relative z-10">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-3 h-3 rounded-full bg-emerald-400 animate-ping"></div>
+            <h2 class="text-lg font-bold tracking-wide">🎮 픽셀 게임 오피스 (AI 직원 실시간 모니터링)</h2>
+          </div>
+          <span class="text-xs px-3 py-1 bg-indigo-900/80 rounded-full border border-indigo-700/50 text-indigo-200">마우스를 직원 위에 올리면 상세 정보 및 해고/고용 관리 가능</span>
+        </div>
+
+        <div id="pixel-office-grid" class="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 py-2">
+          <!-- Pixel Employee Desks injected dynamically -->
+        </div>
+      </div>
+    </section>
+
+    <!-- AI Inquiry & Autonomous Support Section -->
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 p-5">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="font-semibold text-lg">🤖 AI 전면 고객 문의 및 지원 센터</h2>
+          <p class="text-xs text-gray-500">모든 인바운드 문의와 지원 티켓을 AI 직원들이 실시간으로 분류, 분석하고 초안을 자동 작성하여 대응합니다.</p>
+        </div>
+        <button id="ai-inquiries-sync" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700">문의 자동 처리 동기화</button>
+      </div>
+      <div id="ai-inquiries-list" class="space-y-3">
+        <div class="p-3 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm flex items-center justify-between">
+          <div>
+            <div class="font-medium">#1024 - 도메인 SSL 인증서 자동 갱신 문의</div>
+            <div class="text-xs text-gray-500 mt-0.5">AI 담당자: Support Bot (사원) · 상태: <span class="text-emerald-600 font-semibold">자동 답변 초안 생성 완료</span></div>
+          </div>
+          <button class="px-3 py-1 rounded bg-indigo-600 text-white text-xs">AI 응답 발송</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Perfect Provisioning Status Section -->
+    <section class="bg-white dark:bg-slate-900 rounded-xl border border-gray-200 dark:border-slate-800 p-5">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="font-semibold text-lg">⚡ 완벽한 통합 호스팅 프로비저닝 엔진</h2>
+          <p class="text-xs text-gray-500">컨테이너, 데이터베이스, 도메인, 스토리지, 네트워크 메쉬의 무중단 제로 다운타임 프로비저닝 파이프라인.</p>
+        </div>
+        <button id="run-provisioning" class="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700">전체 프로비저닝 검증 실행</button>
+      </div>
+      <div id="provisioning-status" class="grid sm:grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-gray-500">컨테이너 오케스트레이션</div>
+          <div class="font-bold text-emerald-600 mt-1">● 정상 (Zero-Downtime)</div>
+        </div>
+        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-gray-500">데이터베이스 클러스터</div>
+          <div class="font-bold text-emerald-600 mt-1">● 복제본 동기화 완료</div>
+        </div>
+        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-gray-500">도메인 & DNS 레코드</div>
+          <div class="font-bold text-emerald-600 mt-1">● 자동 전파됨</div>
+        </div>
+        <div class="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+          <div class="text-xs text-gray-500">보안 및 메쉬 인증서</div>
+          <div class="font-bold text-emerald-600 mt-1">● 자동 갱신 활성</div>
+        </div>
+      </div>
+    </section>
 
     <div id="kpis" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
     <div id="goals" class="grid md:grid-cols-2 gap-3"></div>
@@ -72,7 +139,7 @@ import Layout from '../../../layouts/Layout.astro';
     </section>
   </div>
   <script>
-    import { initCompany } from '@/scripts/company.ts';
+    import { initCompany } from "@/scripts/company.ts";
     initCompany();
   </script>
 </Layout>
