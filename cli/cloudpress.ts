@@ -57,7 +57,7 @@ program
       .option("-d, --database <name>", "Database name")
       .action(async (options) => {
         const env = options.env === "production" ? "production" : "staging";
-        await runCommand("npx", ["wrangler", "d1", "execute", options.database || "cloudpress-db", "--env", env, "--command", ".schema"]);
+        await runCommand("npx", ["wrangler", "d1", "execute", options.database || "cloudpress-db", "--remote", "--command", ".schema"]);
       })
   )
   .addCommand(
@@ -67,7 +67,7 @@ program
       .option("--dry-run", "Preview migrations without applying")
       .action(async (options) => {
         const env = options.env === "production" ? "production" : "staging";
-        const args = ["d1", "migrations", "apply", "cloudpress-db", "--env", env];
+        const args = ["d1", "migrations", "apply", "cloudpress-db", "--remote"];
         if (options.dryRun) args.push("--dry-run");
         await runCommand("npx", ["wrangler", ...args]);
       })
@@ -80,7 +80,7 @@ program
       .action(async (options) => {
         const env = options.env === "production" ? "production" : "staging";
         console.log("Creating backup for " + (options.database || "cloudpress-db") + "...");
-        await runCommand("npx", ["wrangler", "d1", "backup", "create", options.database || "cloudpress-db", "--env", env]);
+        await runCommand("npx", ["wrangler", "d1", "backup", "create", options.database || "cloudpress-db", "--remote"]);
       })
   );
 
