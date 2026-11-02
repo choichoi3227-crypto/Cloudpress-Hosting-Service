@@ -130,19 +130,43 @@ const { title } = Astro.props;
 
     <!-- Script for sidebar collapse/expand and mobile menu -->
     <script>
+      import '../scripts/session.ts';
 
+      const sidebar = document.getElementById('sidebar');
+      const toggle = document.getElementById('sidebar-toggle');
+      const toggleIcon = document.getElementById('sidebar-toggle-icon');
+      const mobileToggle = document.getElementById('mobile-menu-toggle');
+      const backdrop = document.getElementById('sidebar-backdrop');
 
       let isCollapsed = false;
 
+      // 데스크톱: 사이드바 접기/펼치기
+      toggle?.addEventListener('click', () => {
         isCollapsed = !isCollapsed;
         if (isCollapsed) {
+          sidebar?.classList.remove('w-64');
+          sidebar?.classList.add('w-16', 'sidebar-collapsed');
+          toggleIcon?.classList.add('rotate-180');
         } else {
+          sidebar?.classList.remove('w-16', 'sidebar-collapsed');
+          sidebar?.classList.add('w-64');
+          toggleIcon?.classList.remove('rotate-180');
         }
       });
 
+      // 모바일: 드로어 열기/닫기
+      const openDrawer = () => {
+        sidebar?.classList.remove('-translate-x-full');
+        backdrop?.classList.remove('hidden');
+      };
+      const closeDrawer = () => {
+        sidebar?.classList.add('-translate-x-full');
+        backdrop?.classList.add('hidden');
+      };
+      mobileToggle?.addEventListener('click', () => {
+        sidebar?.classList.contains('-translate-x-full') ? openDrawer() : closeDrawer();
       });
-
-      });
+      backdrop?.addEventListener('click', closeDrawer);
     </script>
 
     <footer class="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 text-center text-sm text-slate-500 dark:text-slate-400 z-20">
@@ -152,4 +176,5 @@ const { title } = Astro.props;
 </html>
 
 <style is:global>
+  #sidebar.sidebar-collapsed .sidebar-label { display: none; }
 </style>
