@@ -17,7 +17,8 @@ export const MIGRATIONS = [
   "0011_cpu_addons_paypal.sql",
   "0012_cas.sql",
   "0013_ai_workforce.sql",
-  "0014_affiliate_program.sql"
+  "0014_affiliate_program.sql",
+  "0015_production_schema_fixes.sql"
 ];
 export const readMigration = (f: string) => readFileSync(new URL(`../../migrations/${f}`, import.meta.url), "utf8");
 
