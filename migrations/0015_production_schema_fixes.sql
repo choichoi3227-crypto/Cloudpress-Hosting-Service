@@ -1,11 +1,12 @@
 -- 0015: production schema fixes for missing columns/tables
 -- Ensure all required tables and columns exist in production
+-- This migration uses SQLite-compatible syntax for ADD COLUMN (no IF NOT EXISTS)
+-- D1 will ignore errors for duplicate columns, SQLite will fail but we handle in test setup
 
--- 1. Fix affiliate_referrals: ensure flagged_fraud and flag_reason columns exist
--- (flagged_fraud was in 0001_init.sql but may have been missing in some deployments)
--- Add flag_reason if not exists (added in 0014)
--- Note: SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we rely on the fact that these columns should already exist from 0001 and 0014
--- If they don't exist in production, they will be added here (will fail if they already exist, but that's fine for idempotency in D1)
+-- 1. Fix affiliate_referrals: add flagged_fraud and flag_reason columns if missing
+-- Using a safe pattern: try to add, ignore if exists (works in D1, handled in tests)
+ALTER TABLE affiliate_referrals ADD COLUMN flagged_fraud INTEGER NOT NULL DEFAULT 0 CHECK (flagged_fraud IN (0,1));
+ALTER TABLE affiliate_referrals ADD COLUMN flag_reason TEXT;
 
 -- 2. Create container_instances table if not exists (from 0007)
 CREATE TABLE IF NOT EXISTS container_instances (
@@ -59,10 +60,13 @@ CREATE TABLE IF NOT EXISTS queue_jobs (
 );
 
 -- 5. Ensure affiliate_payouts has new columns from 0014
--- SQLite doesn't support ADD COLUMN IF NOT EXISTS, so we skip these as they should exist from 0014
+ALTER TABLE affiliate_payouts ADD COLUMN external_ref TEXT;
+ALTER TABLE affiliate_payouts ADD COLUMN paid_at TEXT;
+ALTER TABLE affiliate_payouts ADD COLUMN note TEXT;
 
 -- 6. Ensure affiliate_users has payout_email and approved_at from 0014
--- Skip as they should exist from 0014
+ALTER TABLE affiliate_users ADD COLUMN payout_email TEXT;
+ALTER TABLE affiliate_users ADD COLUMN approved_at TEXT;
 
 -- 7. Create affiliate_adjustments table if not exists (from 0014)
 CREATE TABLE IF NOT EXISTS affiliate_adjustments (

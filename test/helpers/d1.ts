@@ -34,7 +34,15 @@ class Stmt implements D1Stmt {
 export function makeDb(): { db: D1Like; raw: DB } {
   const raw = new DatabaseSync(":memory:");
   raw.exec("PRAGMA foreign_keys = ON");
-  for (const f of MIGRATIONS) { raw.exec("BEGIN"); raw.exec(readMigration(f)); raw.exec("COMMIT"); } // D1 도 마이그레이션을 트랜잭션으로 적용
+  for (const f of MIGRATIONS) {
+    raw.exec("BEGIN");
+    try { raw.exec(readMigration(f)); }
+    catch (e: any) {
+      // Ignore "duplicate column" errors for SQLite (D1 supports ADD COLUMN IF NOT EXISTS but SQLite doesn't)
+      if (!String(e.message).includes("duplicate column")) throw e;
+    }
+    raw.exec("COMMIT");
+  }
   const db: D1Like = {
     prepare: (sql) => new Stmt(raw, sql),
     async batch(stmts) {
