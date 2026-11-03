@@ -234,9 +234,22 @@ add("POST", "/api/cas/keys/:id/rotate", async (c, m) => c.json({ ...(await rotat
 
 add("GET", "/api/cas/usage", async (c) => {
   const ms = new Date(c.now); ms.setUTCDate(1); ms.setUTCHours(0, 0, 0, 0);
-  const rows = await all(c.env.DB, `SELECT m.model_id, m.name, COUNT(*) AS requests, SUM(u.neurons) AS neurons, SUM(u.billed_micro) AS billed
-    FROM ai_usage_records u JOIN ai_models m ON m.id = u.model_id JOIN cas_model_access a ON a.subscription_id = u.subscription_id
-    WHERE a.customer_id = ? AND u.ts >= ? GROUP BY m.id ORDER BY billed DESC`, c.session.user.id, nowIso(ms.getTime()));
+  let rows: any[] = [];
+  try {
+    rows = await all(c.env.DB, `SELECT m.model_id, m.name, COUNT(*) AS requests, SUM(u.neurons) AS neurons, SUM(u.billed_micro) AS billed
+      FROM ai_usage_records u JOIN ai_models m ON m.id = u.model_id JOIN cas_model_access a ON a.subscription_id = u.subscription_id
+      WHERE a.customer_id = ? AND u.ts >= ? GROUP BY m.id ORDER BY billed DESC`, c.session.user.id, nowIso(ms.getTime()));
+  } catch (e: any) {
+    // Fallback: if subscription_id column missing in ai_usage_records, use cas_model_access directly
+    if (String(e.message).includes("subscription_id")) {
+      rows = await all(c.env.DB, `SELECT m.model_id, m.name, COUNT(*) AS requests, SUM(u.neurons) AS neurons, SUM(u.billed_micro) AS billed
+        FROM cas_model_access a JOIN ai_models m ON m.id = a.model_id
+        JOIN ai_usage_records u ON u.model_id = m.id
+        WHERE a.customer_id = ? AND u.ts >= ? GROUP BY m.id ORDER BY billed DESC`, c.session.user.id, nowIso(ms.getTime()));
+    } else {
+      throw e;
+    }
+  }
   return c.json({ balanceMicro: await creditBalance(c.env.DB, c.session.user.id), month: nowIso(ms.getTime()).slice(0, 7), models: rows, note: "Neurons 는 공식 단가로 환산한 추정치이며 Cloudflare 의 실제 집계와 소폭 다를 수 있습니다." });
 });
 

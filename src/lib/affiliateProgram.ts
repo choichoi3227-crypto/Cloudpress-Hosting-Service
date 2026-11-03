@@ -216,7 +216,32 @@ export async function affiliateSummary(db: D1Like, userId: string, origin: strin
 const pub = (p: ProgramPolicy) => ({ ratePct: p.rateBp / 100, minMaintainedMonths: p.minMaintainedMonths, minPayoutMicro: p.minPayoutMicro, maxCommissionMonths: p.maxCommissionMonths, payoutDayOfMonth: p.payoutDayOfMonth });
 
 export async function adminAffiliateOverview(db: D1Like) {
-  const q = async (sql: string) => (await db.prepare(sql).all()).results as any[];
+  const q = async (sql: string) => {
+    try { return (await db.prepare(sql).all()).results as any[]; }
+    catch { return []; }
+  };
+
+  // Check if flagged_fraud column exists
+  let flagged: any[] = [];
+  try {
+    flagged = await q("SELECT r.id, r.flag_reason, r.created_at, a.code, u.email AS referred_email FROM affiliate_referrals r JOIN affiliate_users a ON a.id = r.affiliate_id JOIN users u ON u.id = r.referred_user_id WHERE r.flagged_fraud = 1 ORDER BY r.created_at DESC LIMIT 50");
+  } catch {
+    flagged = [];
+  }
+
+  // Check if period column exists in affiliate_payouts
+  let payouts: any[] = [];
+  try {
+    payouts = await q("SELECT p.id, p.period, p.amount_micro, p.status, p.external_ref, p.paid_at, p.failure_reason, a.code, a.payout_email, u.email FROM affiliate_payouts p JOIN affiliate_users a ON a.id = p.affiliate_id JOIN users u ON u.id = a.user_id ORDER BY p.created_at DESC LIMIT 50");
+  } catch {
+    // Fallback without period column
+    try {
+      payouts = await q("SELECT p.id, '' as period, p.amount_micro, p.status, p.external_ref, p.paid_at, p.failure_reason, a.code, a.payout_email, u.email FROM affiliate_payouts p JOIN affiliate_users a ON a.id = p.affiliate_id JOIN users u ON u.id = a.user_id ORDER BY p.created_at DESC LIMIT 50");
+    } catch {
+      payouts = [];
+    }
+  }
+
   return {
     policy: await loadAffiliatePolicy(db),
     affiliates: await q(`SELECT a.id, a.code, a.status, a.payout_email, u.email, a.created_at,
@@ -224,7 +249,7 @@ export async function adminAffiliateOverview(db: D1Like) {
         (SELECT COALESCE(SUM(amount_micro),0) FROM affiliate_commissions WHERE affiliate_id = a.id AND status IN ('pending','eligible')) AS outstanding,
         (SELECT COALESCE(SUM(amount_micro),0) FROM affiliate_commissions WHERE affiliate_id = a.id AND status = 'paid') AS paid
       FROM affiliate_users a JOIN users u ON u.id = a.user_id ORDER BY CASE a.status WHEN 'pending' THEN 0 ELSE 1 END, a.created_at DESC`),
-    flagged: await q("SELECT r.id, r.flag_reason, r.created_at, a.code, u.email AS referred_email FROM affiliate_referrals r JOIN affiliate_users a ON a.id = r.affiliate_id JOIN users u ON u.id = r.referred_user_id WHERE r.flagged_fraud = 1 ORDER BY r.created_at DESC LIMIT 50"),
-    payouts: await q("SELECT p.id, p.period, p.amount_micro, p.status, p.external_ref, p.paid_at, p.failure_reason, a.code, a.payout_email, u.email FROM affiliate_payouts p JOIN affiliate_users a ON a.id = p.affiliate_id JOIN users u ON u.id = a.user_id ORDER BY p.created_at DESC LIMIT 50"),
+    flagged,
+    payouts,
   };
 }

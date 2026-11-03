@@ -140,17 +140,31 @@ export async function loadSettings(db: D1Like): Promise<WfSettings> {
 export interface Metrics { users: number; activeSubscriptions: number; subscriptionsByKind: Record<string, number>; mrrUsd: number; pastDueSubscriptions: number; deadJobs: number; failedWebhooks: number; unreadOperatorAlerts: number; aiRevenueUsd30d: number; aiCostUsd30d: number; aiMarginPct: number | null; pendingApprovals: number }
 /** 에이전트가 근거로 삼는 실제 회사 지표(DB 집계). 추측이 아니라 이 숫자만 사실로 쓴다. */
 export async function gatherMetrics(db: D1Like, nowMs: number): Promise<Metrics> {
-  const c = async (sql: string, ...b: unknown[]) => (await db.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0;
+  const c = async (sql: string, ...b: unknown[]) => {
+    try { return (await db.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0; }
+    catch { return 0; }
+  };
   const since = nowIso(nowMs - 30 * 86400_000);
   const byKind = await db.prepare("SELECT p.kind k, COUNT(*) n FROM subscriptions s JOIN products p ON p.id = s.product_id WHERE s.status = 'active' GROUP BY p.kind").all<{ k: string; n: number }>();
   const mrr = (await db.prepare("SELECT COALESCE(SUM(pr.monthly_micro * s.quantity),0) AS n FROM subscriptions s JOIN prices pr ON pr.id = s.price_version_id WHERE s.status = 'active'").first<{ n: number }>())?.n ?? 0;
   const rev = (await db.prepare("SELECT COALESCE(SUM(billed_micro),0) r, COALESCE(SUM(cost_micro),0) c FROM ai_usage_records WHERE ts >= ?").bind(since).first<{ r: number; c: number }>()) ?? { r: 0, c: 0 };
+
+  // Handle missing deployment_jobs table/state column
+  let deadJobs = 0;
+  try { deadJobs = await c("SELECT COUNT(*) n FROM deployment_jobs WHERE state = 'dead'"); } catch { deadJobs = 0; }
+
   return {
-    users: await c("SELECT COUNT(*) n FROM users WHERE status != 'deleted'"), activeSubscriptions: await c("SELECT COUNT(*) n FROM subscriptions WHERE status = 'active'"),
-    subscriptionsByKind: Object.fromEntries(byKind.results.map((r) => [r.k, r.n])), mrrUsd: Math.round(mrr / 10_000) / 100,
-    pastDueSubscriptions: await c("SELECT COUNT(*) n FROM subscriptions WHERE status = 'past_due'"), deadJobs: await c("SELECT COUNT(*) n FROM deployment_jobs WHERE state = 'dead'"),
-    failedWebhooks: await c("SELECT COUNT(*) n FROM webhook_events WHERE status = 'failed'"), unreadOperatorAlerts: await c("SELECT COUNT(*) n FROM notifications WHERE audience = 'operator' AND read_at IS NULL"),
-    aiRevenueUsd30d: Math.round(rev.r / 10_000) / 100, aiCostUsd30d: Math.round(rev.c / 10_000) / 100, aiMarginPct: rev.r > 0 ? Math.round(((rev.r - rev.c) / rev.r) * 1000) / 10 : null,
+    users: await c("SELECT COUNT(*) n FROM users WHERE status != 'deleted'"),
+    activeSubscriptions: await c("SELECT COUNT(*) n FROM subscriptions WHERE status = 'active'"),
+    subscriptionsByKind: Object.fromEntries(byKind.results.map((r) => [r.k, r.n])),
+    mrrUsd: Math.round(mrr / 10_000) / 100,
+    pastDueSubscriptions: await c("SELECT COUNT(*) n FROM subscriptions WHERE status = 'past_due'"),
+    deadJobs,
+    failedWebhooks: await c("SELECT COUNT(*) n FROM webhook_events WHERE status = 'failed'"),
+    unreadOperatorAlerts: await c("SELECT COUNT(*) n FROM notifications WHERE audience = 'operator' AND read_at IS NULL"),
+    aiRevenueUsd30d: Math.round(rev.r / 10_000) / 100,
+    aiCostUsd30d: Math.round(rev.c / 10_000) / 100,
+    aiMarginPct: rev.r > 0 ? Math.round(((rev.r - rev.c) / rev.r) * 1000) / 10 : null,
     pendingApprovals: await c("SELECT COUNT(*) n FROM ai_approvals WHERE status = 'pending'"),
   };
 }
