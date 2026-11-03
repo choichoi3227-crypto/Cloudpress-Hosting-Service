@@ -80,3 +80,10 @@ CREATE TABLE IF NOT EXISTS affiliate_adjustments (
 );
 CREATE INDEX IF NOT EXISTS idx_aff_comm_status ON affiliate_commissions(affiliate_id, status);
 CREATE INDEX IF NOT EXISTS idx_aff_ref_aff ON affiliate_referrals(affiliate_id, created_at);
+
+-- 8. Fix ai_runs table: add billed_micro and cost_micro columns with default 0
+-- This fixes NOT NULL constraint failed on billed_micro when AI runs are logged without token counts
+ALTER TABLE ai_runs ADD COLUMN billed_micro INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ai_runs ADD COLUMN cost_micro INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ai_runs ADD COLUMN input_tokens INTEGER;
+ALTER TABLE ai_runs ADD COLUMN output_tokens INTEGER;

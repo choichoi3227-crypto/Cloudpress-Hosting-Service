@@ -211,12 +211,12 @@ async function callLlm(x: CallCtx, agent: AgentRow, phase: "work" | "review" | "
     const t0 = Date.now();
     try {
       const r = await llm.complete(p.external ? scrub(system) : system, p.external ? scrub(user) : user);
-      await x.db.prepare("INSERT INTO ai_runs(id,task_id,meeting_id,agent_id,phase,provider,ok,input_tokens,output_tokens,latency_ms,ts) VALUES(?,?,?,?,?,?,1,?,?,?,?)").bind(newId("run"), task.id ?? null, meetingId ?? null, agent.id, phase, p.name, r.inputTokens, r.outputTokens, Date.now() - t0, nowIso(x.nowMs)).run();
+      await x.db.prepare("INSERT INTO ai_runs(id,task_id,meeting_id,agent_id,phase,provider,ok,input_tokens,output_tokens,billed_micro,cost_micro,latency_ms,ts) VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)").bind(newId("run"), task.id ?? null, meetingId ?? null, agent.id, phase, p.name, r.inputTokens, r.outputTokens, 0, 0, Date.now() - t0, nowIso(x.nowMs)).run();
       return r.text;
     } catch (e) {
       const m = (e instanceof Error ? e.message : String(e)).slice(0, 200);
       errs.push(`${p.name}: ${m}`);
-      await x.db.prepare("INSERT INTO ai_runs(id,task_id,meeting_id,agent_id,phase,provider,ok,latency_ms,error,ts) VALUES(?,?,?,?,?,?,0,?,?,?)").bind(newId("run"), task.id ?? null, meetingId ?? null, agent.id, phase, p.name, Date.now() - t0, m, nowIso(x.nowMs)).run();
+      await x.db.prepare("INSERT INTO ai_runs(id,task_id,meeting_id,agent_id,phase,provider,ok,billed_micro,cost_micro,latency_ms,error,ts) VALUES(?,?,?,?,?,?,0,0,0,?,?,?)").bind(newId("run"), task.id ?? null, meetingId ?? null, agent.id, phase, p.name, Date.now() - t0, m, nowIso(x.nowMs)).run();
     }
   }
   throw new Error(`사용 가능한 AI 공급자가 없습니다(${errs.join("; ") || "활성 공급자 없음"})`);

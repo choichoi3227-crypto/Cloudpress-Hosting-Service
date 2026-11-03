@@ -43,6 +43,14 @@ export function makeDb(): { db: D1Like; raw: DB } {
     }
     raw.exec("COMMIT");
   }
+  // Ensure ai_runs has required columns (migration 0015 ALTER TABLE may not work in test SQLite)
+  const aiRunsInfo = raw.prepare("PRAGMA table_info(ai_runs)").all();
+  const aiRunsCols = Array.isArray(aiRunsInfo) ? aiRunsInfo.map((r: any) => r.name) : [];
+  if (!aiRunsCols.includes("billed_micro")) raw.exec("ALTER TABLE ai_runs ADD COLUMN billed_micro INTEGER NOT NULL DEFAULT 0");
+  if (!aiRunsCols.includes("cost_micro")) raw.exec("ALTER TABLE ai_runs ADD COLUMN cost_micro INTEGER NOT NULL DEFAULT 0");
+  if (!aiRunsCols.includes("input_tokens")) raw.exec("ALTER TABLE ai_runs ADD COLUMN input_tokens INTEGER");
+  if (!aiRunsCols.includes("output_tokens")) raw.exec("ALTER TABLE ai_runs ADD COLUMN output_tokens INTEGER");
+
   const db: D1Like = {
     prepare: (sql) => new Stmt(raw, sql),
     async batch(stmts) {
