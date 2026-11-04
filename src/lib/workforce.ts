@@ -8,6 +8,8 @@ export type Rank = "executive" | "director" | "senior" | "junior";
 export const RANK_LEVEL: Record<Rank, number> = { executive: 4, director: 3, senior: 2, junior: 1 };
 export const RANK_KO: Record<Rank, string> = { executive: "임원", director: "팀장", senior: "선임", junior: "사원" };
 
+export { newId, nowIso };
+
 const DEPTS: { id: string; name: string; mission: string }[] = [
   { id: "strategy", name: "경영전략실", mission: "회사 목표(OKR) 수립과 부서 간 우선순위 조율, 일일 경영 브리핑" },
   { id: "engineering", name: "제품·개발팀", mission: "기능 개선안, 기술부채·테스트 품질 관리, 버그 분석" },
