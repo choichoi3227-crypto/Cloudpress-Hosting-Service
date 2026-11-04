@@ -170,7 +170,16 @@ const { title } = Astro.props;
     </script>
 
     <footer class="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 text-center text-sm text-slate-500 dark:text-slate-400 z-20">
-      &copy; 2026 CloudPress Inc. All rights reserved.
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-3">
+        <a href="/privacy" class="hover:text-primary transition-colors">개인정보처리방침</a>
+        <span class="text-slate-300 dark:text-slate-600">·</span>
+        <a href="/terms" class="hover:text-primary transition-colors">이용약관</a>
+        <span class="text-slate-300 dark:text-slate-600">·</span>
+        <a href="/disclaimer" class="hover:text-primary transition-colors">면책조항</a>
+        <span class="text-slate-300 dark:text-slate-600">·</span>
+        <a href="/about" class="hover:text-primary transition-colors">사이트 소개</a>
+      </div>
+      <p>&copy; 2026 CloudPress Inc. All rights reserved.</p>
     </footer>
   </body>
 </html>
